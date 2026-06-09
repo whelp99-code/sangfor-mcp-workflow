@@ -25,3 +25,6 @@ export * from './parallel-executor.js';
 export * from './llm-client.js';
 export * from './ai-workflow-generator.js';
 export * from './mcp-client.js';
+export * from './excel-parser.js';
+export * from './vendor-comparator.js';
+export * from './report-generator.js';

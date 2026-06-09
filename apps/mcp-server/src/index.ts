@@ -17,6 +17,9 @@ import {
   WorkflowExecutor,
   ErrorHandler,
   McpStdioClient,
+  parseExcelFile,
+  VendorComparator,
+  ReportGenerator,
   type Workflow,
   type ProjectInput,
 } from '@sangfor/workflow-engine';
@@ -327,6 +330,143 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
     handler: async (args: { vaultPath: string; query: string }) => {
       const notes = searchObsidianNotes(args.vaultPath, args.query);
       return { query: args.query, results: notes.length, notes };
+    },
+  },
+
+  // ═══ Excel 파싱 (Phase 1) ═══════════════════════════════════════════════════
+
+  'sangfor_workflow.parse_excel': {
+    description: 'ITAC Excel 체크리스트를 파싱합니다. Result 컬럼이 있는 항목만 추출합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Excel 파일 경로' },
+      },
+      required: ['filePath'],
+    },
+    handler: async (args: { filePath: string }) => {
+      return parseExcelFile(args.filePath);
+    },
+  },
+
+  // ═══ 벤더 비교 (Phase 6) ════════════════════════════════════════════════════
+
+  'sangfor_workflow.compare_vendors': {
+    description: '카테고리별 벤더 솔루션을 비교합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: '카테고리 (예: endpoint-protection, network-security)' },
+        requirement: { type: 'string', description: '요구사항' },
+      },
+      required: ['category'],
+    },
+    handler: async (args: { category: string; requirement?: string }) => {
+      const vendorDB = require('../../data/vendors/vendor-database.json');
+      const comparator = new VendorComparator(vendorDB);
+      return comparator.compareByCategory(args.category, args.requirement || '');
+    },
+  },
+
+  'sangfor_workflow.compare_sangfor_vs_competitors': {
+    description: 'Sangfor 제품과 타 벤더를 비교합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        category: { type: 'string', description: '카테고리' },
+      },
+      required: ['category'],
+    },
+    handler: async (args: { category: string }) => {
+      const vendorDB = require('../../data/vendors/vendor-database.json');
+      const comparator = new VendorComparator(vendorDB);
+      return comparator.compareSangforVsCompetitors(args.category);
+    },
+  },
+
+  'sangfor_workflow.generate_comparison_report': {
+    description: '비교 보고서를 생성합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        customerName: { type: 'string', description: '고객사명' },
+        products: { type: 'array', items: { type: 'string' }, description: '대상 제품' },
+        requirements: { type: 'array', items: { type: 'string' }, description: '요구사항' },
+      },
+      required: ['customerName'],
+    },
+    handler: async (args: { customerName: string; products?: string[]; requirements?: string[] }) => {
+      const generator = new ReportGenerator();
+      return generator.generateComparisonReport({
+        customerName: args.customerName,
+        products: args.products || [],
+        requirements: args.requirements || [],
+        comparisonResults: [],
+        recommendations: [],
+      });
+    },
+  },
+
+  'sangfor_workflow.generate_recommendation_doc': {
+    description: '추천 사유서를 생성합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        customerName: { type: 'string', description: '고객사명' },
+        products: { type: 'array', items: { type: 'string' }, description: '대상 제품' },
+        requirements: { type: 'array', items: { type: 'string' }, description: '요구사항' },
+        recommendations: { type: 'array', description: '추천 목록' },
+      },
+      required: ['customerName'],
+    },
+    handler: async (args: { customerName: string; products?: string[]; requirements?: string[]; recommendations?: any[] }) => {
+      const generator = new ReportGenerator();
+      return generator.generateRecommendationDoc({
+        customerName: args.customerName,
+        products: args.products || [],
+        requirements: args.requirements || [],
+        comparisonResults: [],
+        recommendations: args.recommendations || [],
+      });
+    },
+  },
+
+  'sangfor_workflow.generate_custom_guide': {
+    description: '고객 맞춤 솔루션 가이드를 생성합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        customerName: { type: 'string', description: '고객사명' },
+        products: { type: 'array', items: { type: 'string' }, description: '대상 제품' },
+        requirements: { type: 'array', items: { type: 'string' }, description: '요구사항' },
+        recommendations: { type: 'array', description: '추천 목록' },
+      },
+      required: ['customerName'],
+    },
+    handler: async (args: { customerName: string; products?: string[]; requirements?: string[]; recommendations?: any[] }) => {
+      const generator = new ReportGenerator();
+      return generator.generateCustomGuide({
+        customerName: args.customerName,
+        products: args.products || [],
+        requirements: args.requirements || [],
+        comparisonResults: [],
+        recommendations: args.recommendations || [],
+      });
+    },
+  },
+
+  'sangfor_workflow.list_vendor_categories': {
+    description: '벤더 데이터베이스의 카테고리 목록을 조회합니다.',
+    inputSchema: { type: 'object', properties: {} },
+    handler: async () => {
+      const vendorDB = require('../../data/vendors/vendor-database.json');
+      return vendorDB.categories.map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        vendorCount: c.vendors.length,
+        marketSize: c.marketSize,
+        growthRate: c.growthRate,
+      }));
     },
   },
 };
