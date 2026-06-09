@@ -1,22 +1,28 @@
 /**
- * Tool Registry — tool 등록/관리
+ * Tool Registry — sangfor-engineer-mcp의 실제 MCP tools를 호출하는 registry
  */
 
 import { nowId, createLogger } from '@sangfor/workflow-shared';
 import type { ToolDefinition, ProductCode } from './types.js';
+import { McpStdioClient } from './mcp-client.js';
 
 const log = createLogger('tool-registry');
 
+// ─── Tool Registry ──────────────────────────────────────────────────────────
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
+  private mcpClient: McpStdioClient | null = null;
+
+  // MCP 클라이언트 연결
+  setMcpClient(client: McpStdioClient): void {
+    this.mcpClient = client;
+    log.info('MCP client connected to tool registry');
+  }
 
   // tool 등록
   register(tool: ToolDefinition): void {
-    if (this.tools.has(tool.name)) {
-      log.warn(`Tool already registered, overwriting: ${tool.name}`);
-    }
     this.tools.set(tool.name, tool);
-    log.info(`Registered tool: ${tool.name} (${tool.category})`);
   }
 
   // 여러 tool 한번에 등록
@@ -24,6 +30,37 @@ export class ToolRegistry {
     for (const tool of tools) {
       this.register(tool);
     }
+  }
+
+  // MCP 서버에서 tool 자동 등록
+  async registerFromMcpServer(): Promise<void> {
+    if (!this.mcpClient) {
+      throw new Error('MCP client not connected');
+    }
+
+    const mcpTools = await this.mcpClient.listTools();
+    log.info(`Found ${mcpTools.length} MCP tools`);
+
+    for (const mcpTool of mcpTools) {
+      const tool: ToolDefinition = {
+        name: mcpTool.name,
+        description: mcpTool.description,
+        inputSchema: mcpTool.inputSchema,
+        category: this.categorizeTool(mcpTool.name),
+        tags: this.extractTags(mcpTool.name),
+        estimatedDuration: '10s',
+        riskLevel: 'low',
+        requiresApproval: false,
+        handler: async (args: any) => {
+          if (!this.mcpClient) throw new Error('MCP client not connected');
+          return this.mcpClient.callTool(mcpTool.name, args);
+        },
+      };
+
+      this.register(tool);
+    }
+
+    log.info(`Registered ${mcpTools.length} tools from MCP server`);
   }
 
   // tool 조회
@@ -61,12 +98,7 @@ export class ToolRegistry {
 
   // tool 제거
   unregister(name: string): boolean {
-    const existed = this.tools.has(name);
-    this.tools.delete(name);
-    if (existed) {
-      log.info(`Unregistered tool: ${name}`);
-    }
-    return existed;
+    return this.tools.delete(name);
   }
 
   // 전체 tool 이름 목록
@@ -91,13 +123,44 @@ export class ToolRegistry {
 
     return { total: tools.length, byCategory, byProduct };
   }
+
+  // tool 카테고리 분류
+  private categorizeTool(name: string): string {
+    if (name.includes('import') || name.includes('ingest') || name.includes('learn')) return 'input';
+    if (name.includes('analyze') || name.includes('search') || name.includes('rag')) return 'analysis';
+    if (name.includes('generate') || name.includes('build') || name.includes('create')) return 'output';
+    if (name.includes('capture') || name.includes('screenshot') || name.includes('verify')) return 'verification';
+    if (name.includes('health') || name.includes('check') || name.includes('monitor')) return 'monitoring';
+    if (name.includes('feedback') || name.includes('wiki') || name.includes('lesson')) return 'knowledge';
+    if (name.includes('approval') || name.includes('request')) return 'approval';
+    return 'other';
+  }
+
+  // tool 태그 추출
+  private extractTags(name: string): string[] {
+    const tags: string[] = [];
+    const lower = name.toLowerCase();
+
+    if (lower.includes('epp') || lower.includes('endpoint')) tags.push('epp');
+    if (lower.includes('iag')) tags.push('iag');
+    if (lower.includes('cc') || lower.includes('cyber')) tags.push('cc');
+    if (lower.includes('hci') || lower.includes('scp')) tags.push('hci');
+    if (lower.includes('excel') || lower.includes('import')) tags.push('excel');
+    if (lower.includes('guide') || lower.includes('docx') || lower.includes('pptx')) tags.push('document');
+    if (lower.includes('screenshot') || lower.includes('capture')) tags.push('screenshot');
+    if (lower.includes('health') || lower.includes('check')) tags.push('health');
+    if (lower.includes('rag') || lower.includes('search')) tags.push('rag');
+    if (lower.includes('feedback') || lower.includes('wiki')) tags.push('knowledge');
+
+    if (tags.length === 0) tags.push('product-agnostic');
+    return tags;
+  }
 }
 
-// ─── 기본 tool 정의 (sangfor-engineer-mcp 기반) ─────────────────────────────
+// ─── 기본 tool 정의 (MCP 서버 연결 전 fallback) ─────────────────────────────
 
 export function createDefaultToolDefinitions(): ToolDefinition[] {
   return [
-    // Excel 파싱
     {
       name: 'import_excel',
       description: 'ITAC Excel 체크리스트를 파싱하여 요구사항으로 변환',
@@ -107,13 +170,8 @@ export function createDefaultToolDefinitions(): ToolDefinition[] {
       estimatedDuration: '5s',
       riskLevel: 'low',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { rows: [], count: 0 };
-      },
+      handler: async () => ({ rows: [], count: 0 }),
     },
-
-    // 요구사항 분석
     {
       name: 'analyze_requirements',
       description: '고객 요구사항을 분석하여 제품별 설정 태스크로 변환',
@@ -123,29 +181,19 @@ export function createDefaultToolDefinitions(): ToolDefinition[] {
       estimatedDuration: '10s',
       riskLevel: 'low',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { tasks: [] };
-      },
+      handler: async () => ({ tasks: [] }),
     },
-
-    // 변경 계획 생성
     {
       name: 'generate_change_plan',
-      description: '제품별 변경 계획 생성 (메뉴 경로, API 엔드포인트, 롤백)',
+      description: '제품별 변경 계획 생성',
       inputSchema: { type: 'object', properties: { tasks: { type: 'array' } }, required: ['tasks'] },
       category: 'planning',
       tags: ['planning', 'product-agnostic'],
       estimatedDuration: '15s',
       riskLevel: 'low',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { planId: 'temp-plan-id', steps: [] };
-      },
+      handler: async () => ({ planId: 'temp', steps: [] }),
     },
-
-    // 설정 가이드 생성 (DOCX)
     {
       name: 'generate_setting_guide_docx',
       description: 'Word (.docx) 설정 가이드 생성',
@@ -155,13 +203,8 @@ export function createDefaultToolDefinitions(): ToolDefinition[] {
       estimatedDuration: '20s',
       riskLevel: 'low',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { path: 'outputs/setting-guide.docx' };
-      },
+      handler: async () => ({ path: 'outputs/setting-guide.docx' }),
     },
-
-    // 설정 가이드 생성 (PPTX)
     {
       name: 'generate_setting_guide_pptx',
       description: 'PowerPoint (.pptx) 설정 가이드 생성',
@@ -171,13 +214,8 @@ export function createDefaultToolDefinitions(): ToolDefinition[] {
       estimatedDuration: '25s',
       riskLevel: 'low',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { path: 'outputs/setting-guide.pptx' };
-      },
+      handler: async () => ({ path: 'outputs/setting-guide.pptx' }),
     },
-
-    // 실장비 캡처
     {
       name: 'capture_screenshots',
       description: '실장비 콘솔에서 스크린샷 캡처',
@@ -187,13 +225,8 @@ export function createDefaultToolDefinitions(): ToolDefinition[] {
       estimatedDuration: '60s',
       riskLevel: 'medium',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { captured: 0 };
-      },
+      handler: async () => ({ captured: 0 }),
     },
-
-    // 보고서 생성
     {
       name: 'generate_evidence_report',
       description: '검증 보고서 생성',
@@ -203,13 +236,8 @@ export function createDefaultToolDefinitions(): ToolDefinition[] {
       estimatedDuration: '10s',
       riskLevel: 'low',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { path: 'outputs/evidence-report.md' };
-      },
+      handler: async () => ({ path: 'outputs/evidence-report.md' }),
     },
-
-    // RAG 검색
     {
       name: 'search_manuals',
       description: 'Sangfor 매뉴얼/가이드 검색',
@@ -219,13 +247,8 @@ export function createDefaultToolDefinitions(): ToolDefinition[] {
       estimatedDuration: '5s',
       riskLevel: 'low',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { results: [] };
-      },
+      handler: async () => ({ results: [] }),
     },
-
-    // 실장비 점검
     {
       name: 'run_health_check',
       description: '실장비 정책 상태 확인',
@@ -235,10 +258,7 @@ export function createDefaultToolDefinitions(): ToolDefinition[] {
       estimatedDuration: '90s',
       riskLevel: 'low',
       requiresApproval: false,
-      handler: async (args) => {
-        // TODO: sangfor-engineer-mcp 연동
-        return { status: 'pass', alerts: [] };
-      },
+      handler: async () => ({ status: 'pass', alerts: [] }),
     },
   ];
 }

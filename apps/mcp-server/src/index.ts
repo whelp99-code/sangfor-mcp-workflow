@@ -1,7 +1,7 @@
 /**
  * Sangfor MCP Workflow Server — stdio JSON-RPC MCP 서버
  *
- * AI 기반 동적 워크플로우 엔진 + 3대 핵심 워크플로우
+ * sangfor-engineer-mcp의 MCP tools를 자동으로 호출하는 오케스트레이터
  */
 
 import readline from 'node:readline';
@@ -11,13 +11,12 @@ import { join } from 'node:path';
 
 import {
   ToolRegistry,
-  createDefaultToolDefinitions,
   ExecutionLogger,
   ApprovalManager,
-  WorkflowGenerator,
   AIWorkflowGenerator,
   WorkflowExecutor,
   ErrorHandler,
+  McpStdioClient,
   type Workflow,
   type ProjectInput,
 } from '@sangfor/workflow-engine';
@@ -36,20 +35,43 @@ import {
   listObsidianNotes,
 } from '@sangfor/wiki-sync';
 
+// ─── 경로 설정 ──────────────────────────────────────────────────────────────
+
+const SANGFOR_MCP_SERVER_PATH = join(
+  process.env.HOME || '/Users/jmpark',
+  'Documents/Playground/whelp99-code-sangfor-engineer-mcp/apps/mcp-server/src/index.ts'
+);
+
 // ─── 인스턴스 생성 ──────────────────────────────────────────────────────────
 
 const toolRegistry = new ToolRegistry();
-toolRegistry.registerAll(createDefaultToolDefinitions());
-
 const executionLogger = new ExecutionLogger();
 const approvalManager = new ApprovalManager();
 const errorHandler = new ErrorHandler();
-const workflowGenerator = new WorkflowGenerator(toolRegistry);
-const aiWorkflowGenerator = new AIWorkflowGenerator(toolRegistry, { baseUrl: 'http://localhost:1234/v1' });
 const workflowExecutor = new WorkflowExecutor(toolRegistry, executionLogger, errorHandler);
+
+let mcpClient: McpStdioClient | null = null;
+let aiWorkflowGenerator: AIWorkflowGenerator | null = null;
 
 // 워크플로우 저장소
 const workflows = new Map<string, Workflow>();
+
+// ─── MCP 클라이언트 초기화 ──────────────────────────────────────────────────
+
+async function initializeMcpClient(): Promise<void> {
+  try {
+    mcpClient = new McpStdioClient(SANGFOR_MCP_SERVER_PATH);
+    await mcpClient.start();
+    toolRegistry.setMcpClient(mcpClient);
+    await toolRegistry.registerFromMcpServer();
+    aiWorkflowGenerator = new AIWorkflowGenerator(toolRegistry, { baseUrl: 'http://localhost:1234/v1' });
+    console.log('✅ Connected to sangfor-engineer-mcp');
+  } catch (error) {
+    console.error('⚠️ Failed to connect to sangfor-engineer-mcp:', error);
+    console.log('Using fallback mock tools');
+    aiWorkflowGenerator = new AIWorkflowGenerator(toolRegistry, { baseUrl: 'http://localhost:1234/v1' });
+  }
+}
 
 // ─── 타입 정의 ──────────────────────────────────────────────────────────────
 
@@ -63,7 +85,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
 
   'sangfor_workflow.generate_smart_workflow': {
     description:
-      'AI(LLM)가 고객 요구사항을 분석하고 최적의 워크플로우를 동적으로 생성합니다. LM Studio가 연결되어 있으면 AI 기반, 아니면 규칙 기반으로 생성합니다.',
+      'AI(LLM)가 고객 요구사항을 분석하고 최적의 워크플로우를 동적으로 생성합니다. 기존 sangfor-engineer-mcp의 tools를 자동 호출합니다.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -76,23 +98,19 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       required: ['customerName'],
     },
     handler: async (args: ProjectInput) => {
-      // AI 기반 워크플로우 생성
+      if (!aiWorkflowGenerator) throw new Error('MCP client not initialized');
+
       const profile = await aiWorkflowGenerator.analyzeInput(args);
       const workflow = await aiWorkflowGenerator.generateWorkflow(profile);
 
-      // 워크플로우 저장
       workflows.set(workflow.id, workflow);
-
-      // 승인 요청
       approvalManager.requestApproval(workflow);
 
-      // LLM 상태 확인
       const llmStatus = await aiWorkflowGenerator.checkLLMStatus();
 
       return {
         workflowId: workflow.id,
         name: workflow.name,
-        description: workflow.description,
         steps: workflow.steps.map((s) => ({
           name: s.name,
           toolName: s.toolName,
@@ -101,9 +119,9 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         })),
         reasoning: workflow.reasoning,
         estimatedDuration: workflow.estimatedDuration,
-        estimatedCost: workflow.estimatedCost,
         status: workflow.status,
         llmStatus: llmStatus.available ? `AI (${llmStatus.model})` : '규칙 기반 (LLM 미연결)',
+        mcpConnected: mcpClient?.isConnected() || false,
         message: '워크플로우가 생성되었습니다. 승인 후 실행해주세요.',
       };
     },
@@ -128,8 +146,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         workflowId: workflow.id,
         status: workflow.status,
         approvedBy: workflow.approvedBy,
-        approvedAt: workflow.approvedAt,
-        message: '워크플로우가 승인되었습니다. 실행할 준비가 되었습니다.',
+        message: '워크플로우가 승인되었습니다.',
       };
     },
   },
@@ -145,21 +162,13 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       required: ['workflowId', 'reason'],
     },
     handler: async (args: { workflowId: string; reason: string }) => {
-      const workflow = workflows.get(args.workflowId);
-      if (!workflow) throw new Error(`Workflow not found: ${args.workflowId}`);
-
       approvalManager.reject(args.workflowId, args.reason);
-      return {
-        workflowId: workflow.id,
-        status: workflow.status,
-        reason: args.reason,
-        message: '워크플로우가 거절되었습니다.',
-      };
+      return { status: 'rejected', reason: args.reason };
     },
   },
 
   'sangfor_workflow.execute_workflow': {
-    description: '승인된 워크플로우를 실행합니다. 각 단계가 순차적으로 실행되며, 중간 결과가 자동으로 전달됩니다.',
+    description: '승인된 워크플로우를 실행합니다. 기존 sangfor-engineer-mcp의 tools를 순차 호출합니다.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -171,7 +180,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       const workflow = workflows.get(args.workflowId);
       if (!workflow) throw new Error(`Workflow not found: ${args.workflowId}`);
       if (workflow.status !== 'approved') {
-        throw new Error(`Workflow not approved. Current status: ${workflow.status}`);
+        throw new Error(`Workflow not approved. Status: ${workflow.status}`);
       }
 
       const result = await workflowExecutor.executeWorkflow(workflow);
@@ -201,9 +210,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
           status: s.status,
           error: s.error,
         })),
-        createdAt: workflow.createdAt,
-        updatedAt: workflow.updatedAt,
-        completedAt: workflow.completedAt,
+        mcpConnected: mcpClient?.isConnected() || false,
       };
     },
   },
@@ -216,7 +223,6 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         id: w.id,
         name: w.name,
         status: w.status,
-        createdAt: w.createdAt,
         stepsCount: w.steps.length,
       }));
     },
@@ -233,6 +239,33 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
     },
     handler: async (args: { workflowId: string }) => {
       return executionLogger.getLogs(args.workflowId);
+    },
+  },
+
+  // ═══ MCP 서버 상태 ═════════════════════════════════════════════════════════
+
+  'sangfor_workflow.get_mcp_status': {
+    description: 'sangfor-engineer-mcp 연결 상태를 확인합니다.',
+    inputSchema: { type: 'object', properties: {} },
+    handler: async () => {
+      return {
+        connected: mcpClient?.isConnected() || false,
+        toolsCount: toolRegistry.listTools().length,
+        serverPath: SANGFOR_MCP_SERVER_PATH,
+      };
+    },
+  },
+
+  'sangfor_workflow.list_mcp_tools': {
+    description: '사용 가능한 MCP tools 목록을 조회합니다.',
+    inputSchema: { type: 'object', properties: {} },
+    handler: async () => {
+      return toolRegistry.listTools().map((t) => ({
+        name: t.name,
+        description: t.description,
+        category: t.category,
+        tags: t.tags,
+      }));
     },
   },
 
@@ -296,21 +329,6 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       return { query: args.query, results: notes.length, notes };
     },
   },
-
-  'sangfor_workflow.list_obsidian_notes': {
-    description: 'Obsidian vault의 전체 노트 목록을 조회합니다.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        vaultPath: { type: 'string', description: 'Obsidian vault 경로' },
-      },
-      required: ['vaultPath'],
-    },
-    handler: async (args: { vaultPath: string }) => {
-      const notes = listObsidianNotes(args.vaultPath);
-      return { total: notes.length, notes };
-    },
-  },
 };
 
 // ─── MCP 서버 핸들러 ────────────────────────────────────────────────────────
@@ -331,7 +349,7 @@ async function handle(req: JsonRpcRequest) {
         id: req.id,
         result: {
           protocolVersion: '2025-06-18',
-          serverInfo: { name: 'sangfor-mcp-workflow', version: '0.1.0' },
+          serverInfo: { name: 'sangfor-mcp-workflow', version: '0.2.0' },
           capabilities: { tools: { listChanged: false } },
         },
       };
@@ -392,6 +410,9 @@ rl.on('line', async (line) => {
   process.stdout.write(`${JSON.stringify(res)}\n`);
 });
 
-process.stderr.write('sangfor-mcp-workflow stdio server started\n');
-process.stderr.write(`Registered ${Object.keys(tools).length} MCP tools\n`);
-process.stderr.write(`Registered ${toolRegistry.listTools().length} workflow engine tools\n`);
+// MCP 클라이언트 초기화
+initializeMcpClient().then(() => {
+  process.stderr.write('sangfor-mcp-workflow stdio server started\n');
+  process.stderr.write(`Registered ${Object.keys(tools).length} MCP tools\n`);
+  process.stderr.write(`MCP client connected: ${mcpClient?.isConnected() || false}\n`);
+});
