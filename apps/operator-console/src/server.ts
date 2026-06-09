@@ -17,7 +17,7 @@ import {
   createDefaultToolDefinitions,
   ExecutionLogger,
   ApprovalManager,
-  WorkflowGenerator,
+  AIWorkflowGenerator,
   WorkflowExecutor,
   ErrorHandler,
   TemplateManager,
@@ -45,7 +45,7 @@ const approvalManager = new ApprovalManager();
 const errorHandler = new ErrorHandler();
 const templateManager = new TemplateManager();
 const monitoringDashboard = new MonitoringDashboard();
-const workflowGenerator = new WorkflowGenerator(toolRegistry);
+const aiWorkflowGenerator = new AIWorkflowGenerator(toolRegistry, { baseUrl: 'http://localhost:1234/v1' });
 const workflowExecutor = new WorkflowExecutor(toolRegistry, executionLogger, errorHandler);
 
 // 워크플로우 저장소
@@ -79,7 +79,7 @@ app.post('/api/workflows/generate', async (req, res) => {
   try {
     const { customerName, excelFilePath, requirements, environment, products } = req.body;
 
-    const profile = await workflowGenerator.analyzeInput({
+    const profile = await aiWorkflowGenerator.analyzeInput({
       customerName,
       excelFilePath,
       requirements,
@@ -87,7 +87,7 @@ app.post('/api/workflows/generate', async (req, res) => {
       products,
     });
 
-    const workflow = await workflowGenerator.generateWorkflow(profile);
+    const workflow = await aiWorkflowGenerator.generateWorkflow(profile);
     workflows.set(workflow.id, workflow);
     monitoringDashboard.registerWorkflow(workflow);
     approvalManager.requestApproval(workflow);

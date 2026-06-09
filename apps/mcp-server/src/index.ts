@@ -15,6 +15,7 @@ import {
   ExecutionLogger,
   ApprovalManager,
   WorkflowGenerator,
+  AIWorkflowGenerator,
   WorkflowExecutor,
   ErrorHandler,
   type Workflow,
@@ -44,6 +45,7 @@ const executionLogger = new ExecutionLogger();
 const approvalManager = new ApprovalManager();
 const errorHandler = new ErrorHandler();
 const workflowGenerator = new WorkflowGenerator(toolRegistry);
+const aiWorkflowGenerator = new AIWorkflowGenerator(toolRegistry, { baseUrl: 'http://localhost:1234/v1' });
 const workflowExecutor = new WorkflowExecutor(toolRegistry, executionLogger, errorHandler);
 
 // 워크플로우 저장소
@@ -61,30 +63,31 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
 
   'sangfor_workflow.generate_smart_workflow': {
     description:
-      'AI가 고객 요구사항을 분석하고 최적의 워크플로우를 동적으로 생성합니다. Excel 체크리스트와 요구사항을 입력하면, AI가 적절한 tool을 선정하고 실행 순서를 결정합니다.',
+      'AI(LLM)가 고객 요구사항을 분석하고 최적의 워크플로우를 동적으로 생성합니다. LM Studio가 연결되어 있으면 AI 기반, 아니면 규칙 기반으로 생성합니다.',
     inputSchema: {
       type: 'object',
       properties: {
         customerName: { type: 'string', description: '고객사명' },
         excelFilePath: { type: 'string', description: 'ITAC Excel 체크리스트 파일 경로' },
-        requirements: { type: 'array', items: { type: 'string' }, description: '추가 요구사항' },
+        requirements: { type: 'array', items: { type: 'string' }, description: '고객 요구사항 목록' },
         environment: { type: 'string', enum: ['lab', 'poc', 'customer', 'production'], description: '환경' },
         products: { type: 'array', items: { type: 'string' }, description: '대상 제품 (자동 감지 가능)' },
       },
-      required: ['customerName', 'excelFilePath'],
+      required: ['customerName'],
     },
     handler: async (args: ProjectInput) => {
-      // 1단계: 입력 분석
-      const profile = await workflowGenerator.analyzeInput(args);
-
-      // 2단계: 워크플로우 생성
-      const workflow = await workflowGenerator.generateWorkflow(profile);
+      // AI 기반 워크플로우 생성
+      const profile = await aiWorkflowGenerator.analyzeInput(args);
+      const workflow = await aiWorkflowGenerator.generateWorkflow(profile);
 
       // 워크플로우 저장
       workflows.set(workflow.id, workflow);
 
       // 승인 요청
       approvalManager.requestApproval(workflow);
+
+      // LLM 상태 확인
+      const llmStatus = await aiWorkflowGenerator.checkLLMStatus();
 
       return {
         workflowId: workflow.id,
@@ -100,6 +103,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         estimatedDuration: workflow.estimatedDuration,
         estimatedCost: workflow.estimatedCost,
         status: workflow.status,
+        llmStatus: llmStatus.available ? `AI (${llmStatus.model})` : '규칙 기반 (LLM 미연결)',
         message: '워크플로우가 생성되었습니다. 승인 후 실행해주세요.',
       };
     },

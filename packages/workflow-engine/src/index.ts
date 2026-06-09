@@ -22,3 +22,5 @@ export * from './error-handler.js';
 export * from './workflow-templates.js';
 export * from './monitoring-dashboard.js';
 export * from './parallel-executor.js';
+export * from './llm-client.js';
+export * from './ai-workflow-generator.js';
