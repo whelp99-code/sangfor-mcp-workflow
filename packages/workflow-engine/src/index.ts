@@ -21,3 +21,4 @@ export * from './workflow-executor.js';
 export * from './error-handler.js';
 export * from './workflow-templates.js';
 export * from './monitoring-dashboard.js';
+export * from './parallel-executor.js';
