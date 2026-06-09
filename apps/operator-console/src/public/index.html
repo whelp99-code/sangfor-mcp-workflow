@@ -27,7 +27,8 @@
     .section h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
 
     .workflow-list { display: flex; flex-direction: column; gap: 8px; }
-    .workflow-item { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; }
+    .workflow-item { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: border-color 0.2s; }
+    .workflow-item:hover { border-color: #3b82f6; }
     .workflow-item .info { flex: 1; }
     .workflow-item .name { font-weight: 600; margin-bottom: 4px; }
     .workflow-item .meta { font-size: 13px; color: #94a3b8; }
@@ -35,6 +36,7 @@
     .workflow-item .status.completed { background: #166534; color: #86efac; }
     .workflow-item .status.rejected { background: #7f1d1d; color: #fca5a5; }
     .workflow-item .status.draft { background: #1e3a5f; color: #93c5fd; }
+    .workflow-item .status.approved { background: #1e3a5f; color: #93c5fd; }
 
     .template-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
     .template-card { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; cursor: pointer; transition: border-color 0.2s; }
@@ -51,6 +53,8 @@
     .btn-success:hover { background: #16a34a; }
     .btn-danger { background: #ef4444; color: white; }
     .btn-danger:hover { background: #dc2626; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-secondary:hover { background: #475569; }
 
     .timeline { display: flex; flex-direction: column; gap: 8px; }
     .timeline-item { display: flex; gap: 12px; align-items: flex-start; }
@@ -63,11 +67,28 @@
 
     .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
     .modal-overlay.active { display: flex; }
-    .modal { background: #1e293b; border-radius: 12px; padding: 24px; width: 500px; max-width: 90vw; border: 1px solid #334155; }
+    .modal { background: #1e293b; border-radius: 12px; padding: 24px; width: 600px; max-width: 90vw; border: 1px solid #334155; max-height: 80vh; overflow-y: auto; }
     .modal h3 { margin-bottom: 16px; }
     .modal label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px; margin-top: 12px; }
-    .modal input, .modal select { width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 14px; }
+    .modal input, .modal select, .modal textarea { width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 14px; font-family: inherit; }
+    .modal textarea { min-height: 80px; resize: vertical; }
     .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+    .modal .file-upload { border: 2px dashed #334155; border-radius: 8px; padding: 24px; text-align: center; cursor: pointer; transition: border-color 0.2s; }
+    .modal .file-upload:hover { border-color: #3b82f6; }
+    .modal .file-upload.active { border-color: #3b82f6; background: rgba(59,130,246,0.1); }
+    .modal .file-upload input { display: none; }
+    .modal .file-upload .icon { font-size: 32px; margin-bottom: 8px; }
+    .modal .file-upload .text { font-size: 14px; color: #94a3b8; }
+    .modal .file-upload .filename { font-size: 14px; color: #3b82f6; margin-top: 8px; }
+
+    .product-checkboxes { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+    .product-checkboxes label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #e2e8f0; cursor: pointer; margin: 0; }
+    .product-checkboxes input[type="checkbox"] { width: auto; accent-color: #3b82f6; }
+
+    .requirement-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .requirement-item { display: flex; gap: 8px; align-items: center; }
+    .requirement-item input { flex: 1; }
+    .requirement-item .btn { padding: 4px 8px; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -102,31 +123,65 @@
   <!-- Generate Modal -->
   <div class="modal-overlay" id="generateModal">
     <div class="modal">
-      <h3>Create Workflow</h3>
-      <label>Customer Name</label>
-      <input type="text" id="customerName" placeholder="Enter customer name">
-      <label>Requirements (comma separated)</label>
-      <input type="text" id="requirements" placeholder="URL filtering, USB policy">
+      <h3>Create New Workflow</h3>
+
+      <label>Customer Name *</label>
+      <input type="text" id="customerName" placeholder="Enter customer name" required>
+
+      <label>Environment</label>
+      <select id="environment">
+        <option value="customer">Customer</option>
+        <option value="lab">Lab</option>
+        <option value="poc">PoC</option>
+        <option value="production">Production</option>
+      </select>
+
+      <label>Target Products</label>
+      <div class="product-checkboxes">
+        <label><input type="checkbox" name="products" value="IAG"> IAG</label>
+        <label><input type="checkbox" name="products" value="ENDPOINT_SECURE"> EPP</label>
+        <label><input type="checkbox" name="products" value="CYBER_COMMAND"> CC</label>
+        <label><input type="checkbox" name="products" value="HCI_SCP"> HCI</label>
+      </div>
+
+      <label>Excel Checklist File</label>
+      <div class="file-upload" id="fileUpload" onclick="document.getElementById('excelFile').click()">
+        <input type="file" id="excelFile" accept=".xlsx,.xls" onchange="handleFileSelect(event)">
+        <div class="icon">📁</div>
+        <div class="text">Click to upload ITAC Excel checklist</div>
+        <div class="filename" id="fileName"></div>
+      </div>
+
+      <label>Customer Requirements</label>
+      <div class="requirement-list" id="requirementList">
+        <div class="requirement-item">
+          <input type="text" placeholder="Enter requirement (e.g., URL filtering policy)">
+          <button class="btn btn-danger" onclick="removeRequirement(this)">✕</button>
+        </div>
+      </div>
+      <button class="btn btn-secondary" style="margin-top:8px" onclick="addRequirement()">+ Add Requirement</button>
+
       <div class="actions">
-        <button class="btn" onclick="closeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="generateWorkflow()">Generate</button>
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="generateWorkflow()">Generate Workflow</button>
       </div>
     </div>
   </div>
 
   <!-- Detail Modal -->
   <div class="modal-overlay" id="detailModal">
-    <div class="modal" style="width:600px">
+    <div class="modal" style="width:700px">
       <h3 id="detailTitle">Workflow Detail</h3>
       <div id="detailContent"></div>
-      <div class="actions">
-        <button class="btn" onclick="closeDetailModal()">Close</button>
+      <div class="actions" id="detailActions">
+        <button class="btn btn-secondary" onclick="closeDetailModal()">Close</button>
       </div>
     </div>
   </div>
 
   <script>
     const API = '';
+    let selectedFile = null;
 
     async function loadDashboard() {
       const [stats, workflows, templates] = await Promise.all([
@@ -167,36 +222,136 @@
       document.getElementById('detailTitle').textContent = data.workflow.name;
 
       let html = '<div style="margin-bottom:12px"><strong>Status:</strong> <span class="status ' + data.workflow.status + '">' + data.workflow.status + '</span></div>';
+      html += '<div style="margin-bottom:12px"><strong>Customer:</strong> ' + data.workflow.customerProfile.customerName + '</div>';
+      html += '<div style="margin-bottom:12px"><strong>Products:</strong> ' + data.workflow.customerProfile.products.join(', ') + '</div>';
+
+      if (data.workflow.customerProfile.requirements.length > 0) {
+        html += '<div style="margin-bottom:12px"><strong>Requirements:</strong><ul style="margin-top:4px;padding-left:20px">';
+        data.workflow.customerProfile.requirements.forEach(r => {
+          html += '<li style="font-size:13px;color:#94a3b8;margin-top:2px">' + r.text + '</li>';
+        });
+        html += '</ul></div>';
+      }
+
+      html += '<div style="margin-bottom:12px"><strong>Steps:</strong></div>';
+      html += '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px">';
+      data.workflow.steps.forEach(s => {
+        const icon = s.status === 'completed' ? '✅' : s.status === 'failed' ? '❌' : s.status === 'running' ? '⏳' : '⏸️';
+        html += '<div style="font-size:13px;display:flex;gap:8px;align-items:center"><span>' + icon + '</span><span>' + s.name + '</span></div>';
+      });
+      html += '</div>';
 
       if (data.timeline) {
         html += '<h4 style="margin:12px 0 8px">Timeline</h4><div class="timeline">';
         data.timeline.forEach(t => {
-          const color = t.event.includes('완료') ? 'green' : t.event.includes('승인') ? 'blue' : 'yellow';
+          const color = t.event.includes('완료') || t.event.includes('성공') ? 'green' : t.event.includes('승인') ? 'blue' : 'yellow';
           html += `<div class="timeline-item"><div class="dot ${color}"></div><div><div class="event">${t.event}</div><div class="time">${new Date(t.time).toLocaleTimeString()}</div></div></div>`;
         });
         html += '</div>';
       }
 
       document.getElementById('detailContent').innerHTML = html;
+
+      // Action buttons
+      let actions = '<button class="btn btn-secondary" onclick="closeDetailModal()">Close</button>';
+      if (data.workflow.status === 'draft') {
+        actions = '<button class="btn btn-success" onclick="approveWorkflow(\'' + id + '\')">Approve</button><button class="btn btn-danger" onclick="rejectWorkflow(\'' + id + '\')">Reject</button>' + actions;
+      } else if (data.workflow.status === 'approved') {
+        actions = '<button class="btn btn-primary" onclick="executeWorkflow(\'' + id + '\')">Execute</button>' + actions;
+      }
+      document.getElementById('detailActions').innerHTML = actions;
+
       document.getElementById('detailModal').classList.add('active');
     }
 
-    function openGenerateModal() { document.getElementById('generateModal').classList.add('active'); }
-    function closeModal() { document.getElementById('generateModal').classList.remove('active'); }
-    function closeDetailModal() { document.getElementById('detailModal').classList.remove('active'); }
+    function openGenerateModal() {
+      document.getElementById('generateModal').classList.add('active');
+    }
+
+    function closeModal() {
+      document.getElementById('generateModal').classList.remove('active');
+      // Reset form
+      document.getElementById('customerName').value = '';
+      document.getElementById('environment').value = 'customer';
+      document.querySelectorAll('input[name="products"]').forEach(cb => cb.checked = false);
+      document.getElementById('fileName').textContent = '';
+      selectedFile = null;
+      document.getElementById('requirementList').innerHTML = `
+        <div class="requirement-item">
+          <input type="text" placeholder="Enter requirement (e.g., URL filtering policy)">
+          <button class="btn btn-danger" onclick="removeRequirement(this)">✕</button>
+        </div>
+      `;
+    }
+
+    function closeDetailModal() {
+      document.getElementById('detailModal').classList.remove('active');
+    }
+
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (file) {
+        selectedFile = file;
+        document.getElementById('fileName').textContent = file.name;
+        document.getElementById('fileUpload').classList.add('active');
+      }
+    }
+
+    function addRequirement() {
+      const list = document.getElementById('requirementList');
+      const item = document.createElement('div');
+      item.className = 'requirement-item';
+      item.innerHTML = `
+        <input type="text" placeholder="Enter requirement">
+        <button class="btn btn-danger" onclick="removeRequirement(this)">✕</button>
+      `;
+      list.appendChild(item);
+    }
+
+    function removeRequirement(btn) {
+      const list = document.getElementById('requirementList');
+      if (list.children.length > 1) {
+        btn.parentElement.remove();
+      }
+    }
+
+    function getRequirements() {
+      const inputs = document.querySelectorAll('#requirementList input');
+      return Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+    }
+
+    function getSelectedProducts() {
+      const checkboxes = document.querySelectorAll('input[name="products"]:checked');
+      return Array.from(checkboxes).map(cb => cb.value);
+    }
 
     async function generateWorkflow() {
-      const name = document.getElementById('customerName').value;
-      const reqs = document.getElementById('requirements').value.split(',').map(s => s.trim()).filter(Boolean);
+      const name = document.getElementById('customerName').value.trim();
+      if (!name) {
+        alert('Customer name is required');
+        return;
+      }
+
+      const environment = document.getElementById('environment').value;
+      const products = getSelectedProducts();
+      const requirements = getRequirements();
+
+      const body = {
+        customerName: name,
+        excelFilePath: selectedFile ? selectedFile.name : './checklist.xlsx',
+        requirements: requirements,
+        environment: environment,
+        products: products.length > 0 ? products : undefined
+      };
 
       const result = await fetch(API + '/api/workflows/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: name, excelFilePath: './checklist.xlsx', requirements: reqs })
+        body: JSON.stringify(body)
       }).then(r => r.json());
 
-      alert('Workflow created: ' + result.name);
       closeModal();
+      alert('Workflow created: ' + result.name + ' (' + result.steps + ' steps)');
       loadDashboard();
     }
 
@@ -211,6 +366,38 @@
       }).then(r => r.json());
 
       alert('Workflow created: ' + result.name);
+      loadDashboard();
+    }
+
+    async function approveWorkflow(id) {
+      await fetch(API + '/api/workflows/' + id + '/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvedBy: 'admin' })
+      });
+      closeDetailModal();
+      loadDashboard();
+    }
+
+    async function rejectWorkflow(id) {
+      const reason = prompt('Rejection reason:');
+      if (!reason) return;
+      await fetch(API + '/api/workflows/' + id + '/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason })
+      });
+      closeDetailModal();
+      loadDashboard();
+    }
+
+    async function executeWorkflow(id) {
+      if (!confirm('Execute this workflow?')) return;
+      const result = await fetch(API + '/api/workflows/' + id + '/execute', {
+        method: 'POST'
+      }).then(r => r.json());
+      closeDetailModal();
+      alert('Execution completed: ' + result.stepsSucceeded + '/' + result.stepsExecuted + ' steps succeeded');
       loadDashboard();
     }
 
