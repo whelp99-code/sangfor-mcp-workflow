@@ -9,12 +9,14 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@sangfor/workflow-core": "workspace:*",
-    "@sangfor/health-checker": "workspace:*",
-    "@sangfor/wiki-sync": "workspace:*",
-    "@sangfor/workflow-shared": "workspace:*"
+    "@sangfor/workflow-engine": "workspace:*",
+    "@sangfor/workflow-shared": "workspace:*",
+    "express": "^5.1.0",
+    "cors": "^2.8.5"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/cors": "^2.8.17",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

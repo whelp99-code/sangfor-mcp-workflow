@@ -3,6 +3,7 @@
  */
 
 import { type ProductCode, type RiskLevel } from '@sangfor/workflow-shared';
+export type { ProductCode, RiskLevel };
 
 // ─── 고객 프로필 ────────────────────────────────────────────────────────────
 

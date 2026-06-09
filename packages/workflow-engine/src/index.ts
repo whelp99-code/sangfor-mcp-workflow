@@ -19,3 +19,5 @@ export * from './dependency-analyzer.js';
 export * from './workflow-generator.js';
 export * from './workflow-executor.js';
 export * from './error-handler.js';
+export * from './workflow-templates.js';
+export * from './monitoring-dashboard.js';
