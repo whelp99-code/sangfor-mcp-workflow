@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sangfor MCP Workflow Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+    .header { background: #1e293b; padding: 16px 24px; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 12px; }
+    .header h1 { font-size: 20px; font-weight: 600; }
+    .header .badge { background: #22c55e; color: #000; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+    .stat-card .label { font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; }
+    .stat-card .value.green { color: #22c55e; }
+    .stat-card .value.blue { color: #3b82f6; }
+    .stat-card .value.yellow { color: #eab308; }
+    .stat-card .value.red { color: #ef4444; }
+
+    .section { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; margin-bottom: 24px; }
+    .section h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+
+    .workflow-list { display: flex; flex-direction: column; gap: 8px; }
+    .workflow-item { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; }
+    .workflow-item .info { flex: 1; }
+    .workflow-item .name { font-weight: 600; margin-bottom: 4px; }
+    .workflow-item .meta { font-size: 13px; color: #94a3b8; }
+    .workflow-item .status { padding: 4px 12px; border-radius: 16px; font-size: 12px; font-weight: 600; }
+    .workflow-item .status.completed { background: #166534; color: #86efac; }
+    .workflow-item .status.rejected { background: #7f1d1d; color: #fca5a5; }
+    .workflow-item .status.draft { background: #1e3a5f; color: #93c5fd; }
+
+    .template-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .template-card { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; cursor: pointer; transition: border-color 0.2s; }
+    .template-card:hover { border-color: #3b82f6; }
+    .template-card .name { font-weight: 600; margin-bottom: 4px; }
+    .template-card .desc { font-size: 13px; color: #94a3b8; margin-bottom: 8px; }
+    .template-card .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+    .template-card .tag { background: #334155; padding: 2px 8px; border-radius: 4px; font-size: 11px; color: #94a3b8; }
+
+    .btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.2s; }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-success { background: #22c55e; color: #000; }
+    .btn-success:hover { background: #16a34a; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+
+    .timeline { display: flex; flex-direction: column; gap: 8px; }
+    .timeline-item { display: flex; gap: 12px; align-items: flex-start; }
+    .timeline-item .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+    .timeline-item .dot.green { background: #22c55e; }
+    .timeline-item .dot.blue { background: #3b82f6; }
+    .timeline-item .dot.yellow { background: #eab308; }
+    .timeline-item .event { font-size: 13px; }
+    .timeline-item .time { font-size: 12px; color: #64748b; }
+
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+    .modal-overlay.active { display: flex; }
+    .modal { background: #1e293b; border-radius: 12px; padding: 24px; width: 500px; max-width: 90vw; border: 1px solid #334155; }
+    .modal h3 { margin-bottom: 16px; }
+    .modal label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px; margin-top: 12px; }
+    .modal input, .modal select { width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 14px; }
+    .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Sangfor MCP Workflow</h1>
+    <span class="badge" id="systemBadge">Healthy</span>
+    <span style="margin-left:auto; font-size:13px; color:#94a3b8;" id="uptime"></span>
+  </div>
+
+  <div class="container">
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="stat-card"><div class="label">Total Workflows</div><div class="value blue" id="totalWorkflows">0</div></div>
+      <div class="stat-card"><div class="label">Completed</div><div class="value green" id="completedWorkflows">0</div></div>
+      <div class="stat-card"><div class="label">Running</div><div class="value yellow" id="runningWorkflows">0</div></div>
+      <div class="stat-card"><div class="label">Steps Executed</div><div class="value" id="totalSteps">0</div></div>
+    </div>
+
+    <!-- Workflows -->
+    <div class="section">
+      <h2>Workflows <button class="btn btn-primary" style="margin-left:auto" onclick="openGenerateModal()">+ New Workflow</button></h2>
+      <div class="workflow-list" id="workflowList"></div>
+    </div>
+
+    <!-- Templates -->
+    <div class="section">
+      <h2>Templates</h2>
+      <div class="template-grid" id="templateGrid"></div>
+    </div>
+  </div>
+
+  <!-- Generate Modal -->
+  <div class="modal-overlay" id="generateModal">
+    <div class="modal">
+      <h3>Create Workflow</h3>
+      <label>Customer Name</label>
+      <input type="text" id="customerName" placeholder="Enter customer name">
+      <label>Requirements (comma separated)</label>
+      <input type="text" id="requirements" placeholder="URL filtering, USB policy">
+      <div class="actions">
+        <button class="btn" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="generateWorkflow()">Generate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div class="modal-overlay" id="detailModal">
+    <div class="modal" style="width:600px">
+      <h3 id="detailTitle">Workflow Detail</h3>
+      <div id="detailContent"></div>
+      <div class="actions">
+        <button class="btn" onclick="closeDetailModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = '';
+
+    async function loadDashboard() {
+      const [stats, workflows, templates] = await Promise.all([
+        fetch(API + '/api/dashboard/stats').then(r => r.json()),
+        fetch(API + '/api/workflows').then(r => r.json()),
+        fetch(API + '/api/templates').then(r => r.json()),
+      ]);
+
+      document.getElementById('totalWorkflows').textContent = stats.totalWorkflows;
+      document.getElementById('completedWorkflows').textContent = stats.completedWorkflows;
+      document.getElementById('runningWorkflows').textContent = stats.runningWorkflows;
+      document.getElementById('totalSteps').textContent = stats.totalStepsExecuted;
+      document.getElementById('uptime').textContent = 'Uptime: ' + stats.uptime;
+
+      const list = document.getElementById('workflowList');
+      list.innerHTML = workflows.map(w => `
+        <div class="workflow-item" onclick="showDetail('${w.id}')">
+          <div class="info">
+            <div class="name">${w.name}</div>
+            <div class="meta">${w.stepsCount || '-'} steps | Progress: ${w.progress}%</div>
+          </div>
+          <span class="status ${w.status}">${w.status}</span>
+        </div>
+      `).join('') || '<div style="color:#64748b; text-align:center; padding:20px;">No workflows yet. Create one!</div>';
+
+      const grid = document.getElementById('templateGrid');
+      grid.innerHTML = templates.map(t => `
+        <div class="template-card" onclick="createFromTemplate('${t.id}')">
+          <div class="name">${t.name}</div>
+          <div class="desc">${t.description}</div>
+          <div class="tags">${t.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}</div>
+        </div>
+      `).join('');
+    }
+
+    async function showDetail(id) {
+      const data = await fetch(API + '/api/workflows/' + id).then(r => r.json());
+      document.getElementById('detailTitle').textContent = data.workflow.name;
+
+      let html = '<div style="margin-bottom:12px"><strong>Status:</strong> <span class="status ' + data.workflow.status + '">' + data.workflow.status + '</span></div>';
+
+      if (data.timeline) {
+        html += '<h4 style="margin:12px 0 8px">Timeline</h4><div class="timeline">';
+        data.timeline.forEach(t => {
+          const color = t.event.includes('완료') ? 'green' : t.event.includes('승인') ? 'blue' : 'yellow';
+          html += `<div class="timeline-item"><div class="dot ${color}"></div><div><div class="event">${t.event}</div><div class="time">${new Date(t.time).toLocaleTimeString()}</div></div></div>`;
+        });
+        html += '</div>';
+      }
+
+      document.getElementById('detailContent').innerHTML = html;
+      document.getElementById('detailModal').classList.add('active');
+    }
+
+    function openGenerateModal() { document.getElementById('generateModal').classList.add('active'); }
+    function closeModal() { document.getElementById('generateModal').classList.remove('active'); }
+    function closeDetailModal() { document.getElementById('detailModal').classList.remove('active'); }
+
+    async function generateWorkflow() {
+      const name = document.getElementById('customerName').value;
+      const reqs = document.getElementById('requirements').value.split(',').map(s => s.trim()).filter(Boolean);
+
+      const result = await fetch(API + '/api/workflows/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerName: name, excelFilePath: './checklist.xlsx', requirements: reqs })
+      }).then(r => r.json());
+
+      alert('Workflow created: ' + result.name);
+      closeModal();
+      loadDashboard();
+    }
+
+    async function createFromTemplate(templateId) {
+      const name = prompt('Customer name:');
+      if (!name) return;
+
+      const result = await fetch(API + '/api/workflows/from-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId, customerName: name, products: [] })
+      }).then(r => r.json());
+
+      alert('Workflow created: ' + result.name);
+      loadDashboard();
+    }
+
+    loadDashboard();
+    setInterval(loadDashboard, 5000);
+  </script>
+</body>
+</html>

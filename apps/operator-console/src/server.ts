@@ -6,8 +6,12 @@
 
 import express from 'express';
 import cors from 'cors';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createLogger } from '@sangfor/workflow-shared';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import {
   ToolRegistry,
   createDefaultToolDefinitions,
@@ -230,7 +234,7 @@ app.get('/api/events', (req, res) => {
 
 // ─── 웹 UI (SPA) ──────────────────────────────────────────────────────────
 
-app.get('*', (req, res) => {
+app.get('/{*path}', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
