@@ -1,10 +1,7 @@
 /**
  * Sangfor MCP Workflow Server — stdio JSON-RPC MCP 서버
  *
- * 3대 핵심 워크플로우를 MCP tools로 expose:
- * 1. 프로젝트 올인원 파이프라인
- * 2. 실장비 일상 점검
- * 3. Obsidian/GitHub Wiki 동기화
+ * AI 기반 동적 워크플로우 엔진 + 3대 핵심 워크플로우
  */
 
 import readline from 'node:readline';
@@ -13,42 +10,44 @@ import { join } from 'node:path';
 // ─── 패키지 imports ─────────────────────────────────────────────────────────
 
 import {
-  runProjectPipeline,
-  createPipeline,
-  runPipeline,
-  getPipeline,
-  listPipelines,
-  registerScheduledTask,
-  runScheduledTask,
-  listScheduledTasks,
-  getTaskHistory,
-  type ProjectPipelineInput,
-  type HealthCheckConfig,
-  type AutoWikiPipelineConfig,
-} from '@sangfor/workflow-core';
+  ToolRegistry,
+  createDefaultToolDefinitions,
+  ExecutionLogger,
+  ApprovalManager,
+  WorkflowGenerator,
+  WorkflowExecutor,
+  ErrorHandler,
+  type Workflow,
+  type ProjectInput,
+} from '@sangfor/workflow-engine';
 
 import {
   runHealthCheck,
-  compareSnapshots,
-  saveHealthCheckSnapshot,
-  loadHealthCheckSnapshot,
-  listHealthCheckSnapshots,
   createDefaultHealthCheckConfig,
   PRODUCT_URLS,
   PRODUCT_CREDENTIALS,
-  EPP_CHECK_ITEMS,
-  IAG_CHECK_ITEMS,
-  CC_CHECK_ITEMS,
 } from '@sangfor/health-checker';
 
 import {
   runAutoWikiPipeline,
-  getAutoWikiPipelineStatus,
-  applyWikiUpdateToObsidian,
   createLessonNote,
-  listObsidianNotes,
   searchObsidianNotes,
+  listObsidianNotes,
 } from '@sangfor/wiki-sync';
+
+// ─── 인스턴스 생성 ──────────────────────────────────────────────────────────
+
+const toolRegistry = new ToolRegistry();
+toolRegistry.registerAll(createDefaultToolDefinitions());
+
+const executionLogger = new ExecutionLogger();
+const approvalManager = new ApprovalManager();
+const errorHandler = new ErrorHandler();
+const workflowGenerator = new WorkflowGenerator(toolRegistry);
+const workflowExecutor = new WorkflowExecutor(toolRegistry, executionLogger, errorHandler);
+
+// 워크플로우 저장소
+const workflows = new Map<string, Workflow>();
 
 // ─── 타입 정의 ──────────────────────────────────────────────────────────────
 
@@ -58,191 +57,223 @@ type ToolHandler = (args: any) => unknown | Promise<unknown>;
 // ─── MCP Tools 정의 ─────────────────────────────────────────────────────────
 
 const tools: Record<string, { description: string; inputSchema: any; handler: ToolHandler }> = {
-  // ═══ ① 프로젝트 올인원 파이프라인 ═══════════════════════════════════════════
+  // ═══ AI 기반 워크플로우 생성 ═══════════════════════════════════════════════
 
-  'sangfor_workflow.run_project_pipeline': {
+  'sangfor_workflow.generate_smart_workflow': {
     description:
-      'Run complete project pipeline: Excel → requirements → change plan → guides → screenshots → evidence report. 원클릭으로 고객 프로젝트 전체 파이프라인을 실행합니다.',
+      'AI가 고객 요구사항을 분석하고 최적의 워크플로우를 동적으로 생성합니다. Excel 체크리스트와 요구사항을 입력하면, AI가 적절한 tool을 선정하고 실행 순서를 결정합니다.',
     inputSchema: {
       type: 'object',
       properties: {
         customerName: { type: 'string', description: '고객사명' },
         excelFilePath: { type: 'string', description: 'ITAC Excel 체크리스트 파일 경로' },
-        products: {
-          type: 'array',
-          items: { type: 'string' },
-          description: '대상 제품 목록 (자동 감지 가능)',
-        },
-        outputDir: { type: 'string', description: '출력 디렉토리' },
-        captureScreenshots: { type: 'boolean', description: '실장비 스크린샷 캡처 여부' },
-        screenshotProducts: {
-          type: 'array',
-          items: { type: 'string' },
-          description: '스크린샷 대상 제품',
-        },
-        targetUrls: { type: 'object', description: '제품별 타겟 URL' },
-        credentials: { type: 'object', description: '제품별 로그인 정보' },
-        dryRun: { type: 'boolean', description: '드라이런 모드' },
+        requirements: { type: 'array', items: { type: 'string' }, description: '추가 요구사항' },
+        environment: { type: 'string', enum: ['lab', 'poc', 'customer', 'production'], description: '환경' },
+        products: { type: 'array', items: { type: 'string' }, description: '대상 제품 (자동 감지 가능)' },
       },
       required: ['customerName', 'excelFilePath'],
     },
-    handler: (args: ProjectPipelineInput) => runProjectPipeline(args),
+    handler: async (args: ProjectInput) => {
+      // 1단계: 입력 분석
+      const profile = await workflowGenerator.analyzeInput(args);
+
+      // 2단계: 워크플로우 생성
+      const workflow = await workflowGenerator.generateWorkflow(profile);
+
+      // 워크플로우 저장
+      workflows.set(workflow.id, workflow);
+
+      // 승인 요청
+      approvalManager.requestApproval(workflow);
+
+      return {
+        workflowId: workflow.id,
+        name: workflow.name,
+        description: workflow.description,
+        steps: workflow.steps.map((s) => ({
+          name: s.name,
+          toolName: s.toolName,
+          dependsOn: s.dependsOn,
+          optional: s.optional,
+        })),
+        reasoning: workflow.reasoning,
+        estimatedDuration: workflow.estimatedDuration,
+        estimatedCost: workflow.estimatedCost,
+        status: workflow.status,
+        message: '워크플로우가 생성되었습니다. 승인 후 실행해주세요.',
+      };
+    },
   },
 
-  'sangfor_workflow.get_pipeline_status': {
-    description: '파이프라인 상태 조회',
+  'sangfor_workflow.approve_workflow': {
+    description: '생성된 워크플로우를 승인합니다.',
     inputSchema: {
       type: 'object',
       properties: {
-        pipelineId: { type: 'string', description: '파이프라인 ID' },
+        workflowId: { type: 'string', description: '워크플로우 ID' },
+        approvedBy: { type: 'string', description: '승인자 이름' },
       },
-      required: ['pipelineId'],
+      required: ['workflowId', 'approvedBy'],
     },
-    handler: ({ pipelineId }: { pipelineId: string }) => getPipeline(pipelineId),
+    handler: async (args: { workflowId: string; approvedBy: string }) => {
+      const workflow = workflows.get(args.workflowId);
+      if (!workflow) throw new Error(`Workflow not found: ${args.workflowId}`);
+
+      approvalManager.approve(args.workflowId, args.approvedBy);
+      return {
+        workflowId: workflow.id,
+        status: workflow.status,
+        approvedBy: workflow.approvedBy,
+        approvedAt: workflow.approvedAt,
+        message: '워크플로우가 승인되었습니다. 실행할 준비가 되었습니다.',
+      };
+    },
   },
 
-  'sangfor_workflow.list_pipelines': {
-    description: '전체 파이프라인 목록 조회',
+  'sangfor_workflow.reject_workflow': {
+    description: '생성된 워크플로우를 거절합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workflowId: { type: 'string', description: '워크플로우 ID' },
+        reason: { type: 'string', description: '거절 사유' },
+      },
+      required: ['workflowId', 'reason'],
+    },
+    handler: async (args: { workflowId: string; reason: string }) => {
+      const workflow = workflows.get(args.workflowId);
+      if (!workflow) throw new Error(`Workflow not found: ${args.workflowId}`);
+
+      approvalManager.reject(args.workflowId, args.reason);
+      return {
+        workflowId: workflow.id,
+        status: workflow.status,
+        reason: args.reason,
+        message: '워크플로우가 거절되었습니다.',
+      };
+    },
+  },
+
+  'sangfor_workflow.execute_workflow': {
+    description: '승인된 워크플로우를 실행합니다. 각 단계가 순차적으로 실행되며, 중간 결과가 자동으로 전달됩니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workflowId: { type: 'string', description: '워크플로우 ID' },
+      },
+      required: ['workflowId'],
+    },
+    handler: async (args: { workflowId: string }) => {
+      const workflow = workflows.get(args.workflowId);
+      if (!workflow) throw new Error(`Workflow not found: ${args.workflowId}`);
+      if (workflow.status !== 'approved') {
+        throw new Error(`Workflow not approved. Current status: ${workflow.status}`);
+      }
+
+      const result = await workflowExecutor.executeWorkflow(workflow);
+      return result;
+    },
+  },
+
+  'sangfor_workflow.get_workflow_status': {
+    description: '워크플로우 상태를 조회합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workflowId: { type: 'string', description: '워크플로우 ID' },
+      },
+      required: ['workflowId'],
+    },
+    handler: async (args: { workflowId: string }) => {
+      const workflow = workflows.get(args.workflowId);
+      if (!workflow) throw new Error(`Workflow not found: ${args.workflowId}`);
+
+      return {
+        id: workflow.id,
+        name: workflow.name,
+        status: workflow.status,
+        steps: workflow.steps.map((s) => ({
+          name: s.name,
+          status: s.status,
+          error: s.error,
+        })),
+        createdAt: workflow.createdAt,
+        updatedAt: workflow.updatedAt,
+        completedAt: workflow.completedAt,
+      };
+    },
+  },
+
+  'sangfor_workflow.list_workflows': {
+    description: '전체 워크플로우 목록을 조회합니다.',
     inputSchema: { type: 'object', properties: {} },
-    handler: () => listPipelines(),
+    handler: async () => {
+      return Array.from(workflows.values()).map((w) => ({
+        id: w.id,
+        name: w.name,
+        status: w.status,
+        createdAt: w.createdAt,
+        stepsCount: w.steps.length,
+      }));
+    },
   },
 
-  // ═══ ② 실장비 일상 점검 ════════════════════════════════════════════════════
+  'sangfor_workflow.get_execution_logs': {
+    description: '워크플로우 실행 이력을 조회합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workflowId: { type: 'string', description: '워크플로우 ID' },
+      },
+      required: ['workflowId'],
+    },
+    handler: async (args: { workflowId: string }) => {
+      return executionLogger.getLogs(args.workflowId);
+    },
+  },
+
+  // ═══ 실장비 점검 ════════════════════════════════════════════════════════════
 
   'sangfor_workflow.run_health_check': {
-    description:
-      'Run health check on Sangfor product console. EPP/IAG/CC 실장비의 정책 상태를 확인하고 이상을 감지합니다.',
+    description: '실장비 정책 상태를 확인합니다.',
     inputSchema: {
       type: 'object',
       properties: {
         product: { type: 'string', enum: ['EPP', 'IAG', 'CC'], description: '제품 코드' },
         targetUrl: { type: 'string', description: '콘솔 URL' },
-        credentials: {
-          type: 'object',
-          properties: {
-            username: { type: 'string' },
-            password: { type: 'string' },
-          },
-          description: '로그인 정보',
-        },
-        outputDir: { type: 'string', description: '결과 저장 디렉토리' },
       },
       required: ['product'],
     },
-    handler: (args: { product: 'EPP' | 'IAG' | 'CC'; targetUrl?: string; credentials?: { username: string; password: string }; outputDir?: string }) => {
+    handler: async (args: { product: 'EPP' | 'IAG' | 'CC'; targetUrl?: string }) => {
       const config = createDefaultHealthCheckConfig(
         args.product,
         args.targetUrl || PRODUCT_URLS[args.product],
-        args.credentials || PRODUCT_CREDENTIALS[args.product],
-        args.outputDir || join(process.cwd(), 'outputs', 'health-checks')
+        PRODUCT_CREDENTIALS[args.product],
+        join(process.cwd(), 'outputs', 'health-checks')
       );
       return runHealthCheck(config);
     },
   },
 
-  'sangfor_workflow.compare_health_snapshots': {
-    description: '두 점검 결과를 비교하여 변경 사항 및 이상을 감지합니다.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        previousCheckId: { type: 'string', description: '이전 점검 ID' },
-        currentCheckId: { type: 'string', description: '현재 점검 ID' },
-        previousSnapshotPath: { type: 'string', description: '이전 스냅샷 파일 경로' },
-        currentSnapshotPath: { type: 'string', description: '현재 스냅샷 파일 경로' },
-      },
-    },
-    handler: (args: { previousCheckId?: string; currentCheckId?: string; previousSnapshotPath?: string; currentSnapshotPath?: string }) => {
-      // TODO: 스냅샷 로드 및 비교
-      return { message: 'Comparison not yet implemented' };
-    },
-  },
-
-  'sangfor_workflow.get_health_history': {
-    description: '실장비 점검 이력 조회',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        product: { type: 'string', enum: ['EPP', 'IAG', 'CC'], description: '제품 코드' },
-        outputDir: { type: 'string', description: '스냅샷 디렉토리' },
-        limit: { type: 'number', description: '조회 개수' },
-      },
-      required: ['product'],
-    },
-    handler: (args: { product: string; outputDir?: string; limit?: number }) => {
-      const outputDir = args.outputDir || join(process.cwd(), 'outputs', 'health-checks');
-      const snapshots = listHealthCheckSnapshots(outputDir);
-      const limited = args.limit ? snapshots.slice(0, args.limit) : snapshots;
-      return { product: args.product, snapshots: limited };
-    },
-  },
-
-  // ═══ ③ Obsidian/GitHub Wiki 동기화 ════════════════════════════════════════
+  // ═══ Obsidian 연동 ═══════════════════════════════════════════════════════════
 
   'sangfor_workflow.run_auto_wiki_pipeline': {
-    description:
-      'Run automatic wiki update pipeline: feedback → lesson → proposal → Obsidian/GitHub Wiki update. 피드백을 자동으로 처리하여 위키에 반영합니다.',
+    description: '피드백을 자동으로 처리하여 Obsidian 위키에 반영합니다.',
     inputSchema: {
       type: 'object',
       properties: {
         obsidianVaultPath: { type: 'string', description: 'Obsidian vault 경로' },
-        githubWikiRepo: { type: 'string', description: 'GitHub Wiki 저장소 URL' },
         autoApprove: { type: 'boolean', description: '자동 승인 여부' },
-        batchSize: { type: 'number', description: '한 번에 처리할 피드백 수' },
-        feedbackFilter: {
-          type: 'object',
-          properties: {
-            severity: { type: 'array', items: { type: 'string' } },
-            product: { type: 'array', items: { type: 'string' } },
-          },
-        },
       },
       required: ['obsidianVaultPath'],
     },
-    handler: (args: AutoWikiPipelineConfig) => runAutoWikiPipeline(args),
-  },
-
-  'sangfor_workflow.get_wiki_pipeline_status': {
-    description: '자동 위키 파이프라인 상태 조회',
-    inputSchema: { type: 'object', properties: {} },
-    handler: () => getAutoWikiPipelineStatus(),
-  },
-
-  'sangfor_workflow.create_lesson_note': {
-    description: 'Obsidian에 교훈 노트를 생성합니다.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        vaultPath: { type: 'string', description: 'Obsidian vault 경로' },
-        title: { type: 'string', description: '교훈 제목' },
-        product: { type: 'string', description: '관련 제품' },
-        severity: { type: 'string', description: '심각도' },
-        background: { type: 'string', description: '배경' },
-        lessonText: { type: 'string', description: '교훈 내용' },
-        application: { type: 'string', description: '적용 방안' },
-        feedbackId: { type: 'string', description: '관련 피드백 ID' },
-      },
-      required: ['vaultPath', 'title', 'product', 'severity', 'background', 'lessonText', 'application'],
-    },
-    handler: (args: {
-      vaultPath: string;
-      title: string;
-      product: string;
-      severity: string;
-      background: string;
-      lessonText: string;
-      application: string;
-      feedbackId?: string;
-    }) => {
-      const filePath = createLessonNote(args.vaultPath, {
-        title: args.title,
-        product: args.product,
-        severity: args.severity,
-        background: args.background,
-        lessonText: args.lessonText,
-        application: args.application,
-        feedbackId: args.feedbackId,
+    handler: async (args: { obsidianVaultPath: string; autoApprove?: boolean }) => {
+      return runAutoWikiPipeline({
+        obsidianVaultPath: args.obsidianVaultPath,
+        autoApprove: args.autoApprove || false,
+        notifyOnProposal: true,
+        batchSize: 10,
       });
-      return { success: true, filePath };
     },
   },
 
@@ -256,7 +287,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       },
       required: ['vaultPath', 'query'],
     },
-    handler: (args: { vaultPath: string; query: string }) => {
+    handler: async (args: { vaultPath: string; query: string }) => {
       const notes = searchObsidianNotes(args.vaultPath, args.query);
       return { query: args.query, results: notes.length, notes };
     },
@@ -271,42 +302,10 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       },
       required: ['vaultPath'],
     },
-    handler: (args: { vaultPath: string }) => {
+    handler: async (args: { vaultPath: string }) => {
       const notes = listObsidianNotes(args.vaultPath);
       return { total: notes.length, notes };
     },
-  },
-
-  // ═══ 스케줄러 ═══════════════════════════════════════════════════════════════
-
-  'sangfor_workflow.list_scheduled_tasks': {
-    description: '등록된 정기 작업 목록 조회',
-    inputSchema: { type: 'object', properties: {} },
-    handler: () => listScheduledTasks(),
-  },
-
-  'sangfor_workflow.run_scheduled_task': {
-    description: '정기 작업 수동 실행',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string', description: '작업 ID' },
-      },
-      required: ['taskId'],
-    },
-    handler: ({ taskId }: { taskId: string }) => runScheduledTask(taskId),
-  },
-
-  'sangfor_workflow.get_task_history': {
-    description: '정기 작업 실행 이력 조회',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        taskId: { type: 'string', description: '작업 ID' },
-      },
-      required: ['taskId'],
-    },
-    handler: ({ taskId }: { taskId: string }) => getTaskHistory(taskId),
   },
 };
 
@@ -390,3 +389,5 @@ rl.on('line', async (line) => {
 });
 
 process.stderr.write('sangfor-mcp-workflow stdio server started\n');
+process.stderr.write(`Registered ${Object.keys(tools).length} MCP tools\n`);
+process.stderr.write(`Registered ${toolRegistry.listTools().length} workflow engine tools\n`);

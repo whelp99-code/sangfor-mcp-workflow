@@ -31,8 +31,10 @@ export function parseObsidianNote(filePath: string): ObsidianNote {
   // Body 파싱
   const body = lines.slice(bodyStartIndex).join('\n').trim();
 
-  // 태그 추출
-  const tags = extractTags(content);
+  // 태그 추출 (frontmatter + body)
+  const frontmatterTags = frontmatter.tags || [];
+  const bodyTags = extractTags(body);
+  const tags = [...new Set([...frontmatterTags, ...bodyTags])];
 
   // 링크 추출
   const links = extractLinks(content);
