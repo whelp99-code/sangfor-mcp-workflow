@@ -332,13 +332,18 @@
         return;
       }
 
+      const requirements = getRequirements();
+      if (requirements.length === 0 && !selectedFile) {
+        alert('Please enter at least one requirement OR upload an Excel file.');
+        return;
+      }
+
       const environment = document.getElementById('environment').value;
       const products = getSelectedProducts();
-      const requirements = getRequirements();
 
       const body = {
         customerName: name,
-        excelFilePath: selectedFile ? selectedFile.name : './checklist.xlsx',
+        excelFilePath: selectedFile ? selectedFile.name : '',
         requirements: requirements,
         environment: environment,
         products: products.length > 0 ? products : undefined
