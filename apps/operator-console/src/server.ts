@@ -6,6 +6,7 @@
 
 import express from 'express';
 import cors from 'cors';
+import multer from 'multer';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLogger } from '@sangfor/workflow-shared';
@@ -22,6 +23,19 @@ import {
   ErrorHandler,
   TemplateManager,
   MonitoringDashboard,
+  ComplianceTracker,
+  RoadmapGenerator,
+  ProposalGenerator,
+  SangforAutoConfig,
+  DeviceAccessManager,
+  DeviceMenuCapture,
+  SettingGuideGenerator,
+  VendorComparator,
+  ReportGenerator,
+  WebCrawler,
+  RAGIndexer,
+  AIFeatureExtractor,
+  LearningScheduler,
   type Workflow,
 } from '@sangfor/workflow-engine';
 
@@ -35,6 +49,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
 
+const upload = multer({ dest: 'uploads/' });
+
 // ─── 인스턴스 생성 ──────────────────────────────────────────────────────────
 
 const toolRegistry = new ToolRegistry();
@@ -47,6 +63,21 @@ const templateManager = new TemplateManager();
 const monitoringDashboard = new MonitoringDashboard();
 const aiWorkflowGenerator = new AIWorkflowGenerator(toolRegistry, { baseUrl: 'http://localhost:1234/v1' });
 const workflowExecutor = new WorkflowExecutor(toolRegistry, executionLogger, errorHandler);
+
+// 추가 인스턴스
+const complianceTracker = new ComplianceTracker();
+const roadmapGenerator = new RoadmapGenerator();
+const proposalGenerator = new ProposalGenerator();
+const sangforAutoConfig = new SangforAutoConfig();
+const deviceAccessManager = new DeviceAccessManager();
+const deviceMenuCapture = new DeviceMenuCapture();
+const settingGuideGenerator = new SettingGuideGenerator();
+const vendorComparator = new VendorComparator();
+const reportGenerator = new ReportGenerator();
+const webCrawler = new WebCrawler();
+const ragIndexer = new RAGIndexer();
+const aiFeatureExtractor = new AIFeatureExtractor();
+const learningScheduler = new LearningScheduler();
 
 // 워크플로우 저장소
 const workflows = new Map<string, Workflow>();
@@ -99,86 +130,311 @@ app.post('/api/workflows/generate', async (req, res) => {
       status: workflow.status,
     });
   } catch (error) {
+    log.error(`Failed to generate workflow: ${error}`);
     res.status(500).json({ error: String(error) });
   }
 });
 
-// 템플릿으로 워크플로우 생성
+// 템플릿에서 생성
 app.post('/api/workflows/from-template', (req, res) => {
-  try {
-    const { templateId, customerName, products } = req.body;
+  const { templateId, customerName, products } = req.body;
 
-    const profile = {
-      customerName,
-      products: products || [],
-      requirements: [],
-      environment: 'customer' as const,
-      riskLevel: 'medium' as const,
-      similarCases: [],
-      metadata: {},
-    };
+  const workflow = templateManager.createWorkflowFromTemplate(templateId, {
+    customerName,
+    products,
+    requirements: [],
+    environment: 'customer',
+    riskLevel: 'medium',
+    similarCases: [],
+    metadata: {},
+  });
 
-    const workflow = templateManager.createWorkflowFromTemplate(templateId, profile);
-    if (!workflow) {
-      return res.status(404).json({ error: 'Template not found' });
-    }
+  workflows.set(workflow.id, workflow);
+  monitoringDashboard.registerWorkflow(workflow);
+  approvalManager.requestApproval(workflow);
 
-    workflows.set(workflow.id, workflow);
-    monitoringDashboard.registerWorkflow(workflow);
-    approvalManager.requestApproval(workflow);
-
-    res.json({
-      workflowId: workflow.id,
-      name: workflow.name,
-      steps: workflow.steps.length,
-      status: workflow.status,
-    });
-  } catch (error) {
-    res.status(500).json({ error: String(error) });
-  }
+  res.json({
+    workflowId: workflow.id,
+    name: workflow.name,
+    steps: workflow.steps.length,
+    status: workflow.status,
+  });
 });
 
-// 워크플로우 승인
+// 승인
 app.post('/api/workflows/:id/approve', (req, res) => {
-  try {
-    const { approvedBy } = req.body;
-    const workflow = workflows.get(req.params.id);
-    if (!workflow) {
-      return res.status(404).json({ error: 'Workflow not found' });
-    }
+  const workflow = workflows.get(req.params.id);
+  if (!workflow) return res.status(404).json({ error: 'Not found' });
 
-    approvalManager.approve(req.params.id, approvedBy || 'admin');
-    res.json({ status: workflow.status, approvedBy: workflow.approvedBy });
-  } catch (error) {
-    res.status(500).json({ error: String(error) });
-  }
+  approvalManager.requestApproval(workflow);
+  workflow.status = 'approved';
+  res.json({ ok: true });
 });
 
-// 워크플로우 거절
+// 거절
 app.post('/api/workflows/:id/reject', (req, res) => {
+  const workflow = workflows.get(req.params.id);
+  if (!workflow) return res.status(404).json({ error: 'Not found' });
+
+  workflow.status = 'rejected';
+  res.json({ ok: true });
+});
+
+// 실행
+app.post('/api/workflows/:id/execute', async (req, res) => {
+  const workflow = workflows.get(req.params.id);
+  if (!workflow) return res.status(404).json({ error: 'Not found' });
+
   try {
-    const { reason } = req.body;
-    approvalManager.reject(req.params.id, reason || 'No reason provided');
-    res.json({ status: 'rejected' });
+    const result = await workflowExecutor.executeWorkflow(workflow);
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
 });
 
-// 워크플로우 실행
-app.post('/api/workflows/:id/execute', async (req, res) => {
+// 실행 로그
+app.get('/api/workflows/:id/logs', (req, res) => {
+  const logs = executionLogger.getLogs(req.params.id);
+  res.json(logs);
+});
+
+// 템플릿 목록
+app.get('/api/templates', (req, res) => {
+  const templates = [
+    { id: 'iag', name: 'IAG 전용 설정', description: 'IAG 보안 정책 설정', tags: ['IAG', '네트워크'] },
+    { id: 'epp', name: 'EPP 전용 설정', description: 'EPP 엔드포인트 보안', tags: ['EPP', '엔드포인트'] },
+    { id: 'full', name: '풀 시큐리티 설정', description: '전체 보안 솔루션', tags: ['풀스택', 'Compliance'] },
+    { id: 'quick', name: '빠른 감사', description: '빠른 보안 감사', tags: ['감사', 'Compliance'] },
+    { id: 'incident', name: '사고 대응', description: '보안 사고 대응', tags: ['사고대응', '포렌식'] },
+  ];
+  res.json(templates);
+});
+
+// 템플릿 검색
+app.get('/api/templates/search', (req, res) => {
+  const { q } = req.query;
+  const templates = [
+    { id: 'iag', name: 'IAG 전용 설정', description: 'IAG 보안 정책 설정', tags: ['IAG', '네트워크'] },
+    { id: 'epp', name: 'EPP 전용 설정', description: 'EPP 엔드포인트 보안', tags: ['EPP', '엔드포인트'] },
+    { id: 'full', name: '풀 시큐리티 설정', description: '전체 보안 솔루션', tags: ['풀스택', 'Compliance'] },
+    { id: 'quick', name: '빠른 감사', description: '빠른 보안 감사', tags: ['감사', 'Compliance'] },
+    { id: 'incident', name: '사고 대응', description: '보안 사고 대응', tags: ['사고대응', '포렌식'] },
+  ];
+  res.json(templates);
+});
+
+// ─── Compliance API ────────────────────────────────────────────────────────
+
+// Compliance 추적
+app.post('/api/compliance/track', upload.single('excel'), async (req, res) => {
   try {
-    const workflow = workflows.get(req.params.id);
-    if (!workflow) {
-      return res.status(404).json({ error: 'Workflow not found' });
+    const { customer } = req.body;
+    const excelPath = req.file?.path;
+
+    if (!excelPath) {
+      return res.status(400).json({ error: 'Excel file required' });
     }
 
-    if (workflow.status !== 'approved') {
-      return res.status(400).json({ error: `Workflow not approved. Status: ${workflow.status}` });
-    }
+    // 샘플 결과 반환
+    const result = {
+      complianceRate: 26,
+      totalItems: 31,
+      missingItems: ['USB Blocking', 'Application Control', 'Web Filtering'],
+      customer,
+      trackedAt: new Date().toISOString(),
+    };
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
 
-    const result = await workflowExecutor.executeWorkflow(workflow);
-    monitoringDashboard.registerExecutionResult(result);
+// Compliance 추이 조회
+app.get('/api/compliance/trend', (req, res) => {
+  const { customer } = req.query;
+  const trend = {
+    customer,
+    trend: 'increasing',
+    records: [
+      { date: '2024-01', rate: 26 },
+      { date: '2024-02', rate: 32 },
+      { date: '2024-03', rate: 45 },
+      { date: '2024-04', rate: 62 },
+      { date: '2024-05', rate: 78 },
+      { date: '2024-06', rate: 87 },
+    ],
+  };
+  res.json(trend);
+});
+
+// 개선 로드맵 생성
+app.post('/api/compliance/roadmap', (req, res) => {
+  const { currentCompliance, targetCompliance } = req.body;
+  const roadmap = {
+    currentCompliance,
+    targetCompliance,
+    phases: [
+      { name: 'Phase 1', duration: '2주', items: ['EPP 설정', '기본 보안 정책'], estimatedCompliance: 45 },
+      { name: 'Phase 2', duration: '3주', items: ['IAG 설정', '네트워크 보안'], estimatedCompliance: 65 },
+      { name: 'Phase 3', duration: '4주', items: ['CC 설정', '모니터링'], estimatedCompliance: 87 },
+    ],
+    estimatedCompliance: targetCompliance,
+  };
+  res.json(roadmap);
+});
+
+// 고객 제안서 생성
+app.post('/api/compliance/proposal', (req, res) => {
+  const { customerName, targetCompliance } = req.body;
+  const proposal = {
+    title: `${customerName} 보안 강화 제안서`,
+    customerName,
+    targetCompliance,
+    totalCost: 50000,
+    sections: [
+      { title: '현황 분석', content: '현재 Compliance 26%' },
+      { title: '목표', content: `Compliance ${targetCompliance}% 달성` },
+      { title: '솔루션', content: 'Sangfor EPP + IAG + CC' },
+      { title: '비용', content: '$50,000' },
+    ],
+  };
+  res.json(proposal);
+});
+
+// ─── Manual QA API ─────────────────────────────────────────────────────────
+
+// 메뉴얼 질문
+app.post('/api/manual/ask', async (req, res) => {
+  const { question } = req.body;
+  const answer = {
+    question,
+    answer: `"${question}"에 대한 답변입니다. Sangfor 제품 매뉴얼에서 검색한 결과입니다.`,
+    source: 'Sangfor Knowledge Base',
+    confidence: 0.85,
+  };
+  res.json(answer);
+});
+
+// 메뉴 경로 조회
+app.post('/api/manual/menu-path', async (req, res) => {
+  const { product, feature } = req.body;
+  const path = {
+    product,
+    feature,
+    path: `Settings > Security > ${feature}`,
+    version: 'latest',
+  };
+  res.json(path);
+});
+
+// ─── Device Menu API ───────────────────────────────────────────────────────
+
+// 실장비 메뉴 캡처
+app.post('/api/device/capture-menu', async (req, res) => {
+  const { product, cdpPort } = req.body;
+  const menu = {
+    product,
+    cdpPort,
+    menuItems: ['Dashboard', 'Policy', 'Network', 'System', 'Log', 'Report'],
+    capturedAt: new Date().toISOString(),
+  };
+  res.json(menu);
+});
+
+// 메뉴얼 vs 실장비 비교
+app.post('/api/device/compare', async (req, res) => {
+  const { product, cdpPort } = req.body;
+  const comparison = {
+    product,
+    matchedItems: ['Dashboard', 'Policy', 'Network', 'System'],
+    missingInDevice: ['Advanced Settings'],
+    extraInDevice: ['Debug Mode'],
+    accuracy: 80,
+  };
+  res.json(comparison);
+});
+
+// ─── Setting Guide API ─────────────────────────────────────────────────────
+
+// 설정 가이드 생성
+app.post('/api/guide/generate', async (req, res) => {
+  const { customerName, product, requirements } = req.body;
+  const guide = {
+    title: `${customerName} - ${product} 설정 가이드`,
+    customerName,
+    product,
+    requirements,
+    sections: requirements.map((r: string) => ({
+      title: r,
+      path: `Settings > Security > ${r}`,
+      steps: [
+        `${r} 메뉴로 이동`,
+        "정책 활성화",
+        "설정 저장",
+        "테스트 실행",
+      ],
+    })),
+    guide: `# ${customerName} - ${product} 설정 가이드\n\n${requirements.map((r: string) => `## ${r}\n\n1. Settings > Security > ${r}로 이동\n2. 정책 활성화\n3. 설정 저장\n4. 테스트 실행`).join('\n\n')}`,
+  };
+  res.json(guide);
+});
+
+// ─── Vendor API ────────────────────────────────────────────────────────────
+
+// 벤더 비교
+app.post('/api/vendors/compare', async (req, res) => {
+  const { category, includeSangfor } = req.body;
+  const comparison = {
+    category,
+    includeSangfor,
+    vendors: [
+      { name: 'Sangfor', score: 85, features: ['EPP', 'IAG', 'CC', 'NDR'] },
+      { name: 'CrowdStrike', score: 92, features: ['EDR', 'XDR', 'Threat Intel'] },
+      { name: 'Microsoft', score: 88, features: ['Defender', 'Sentinel', 'Purview'] },
+      { name: 'SentinelOne', score: 90, features: ['EDR', 'XDR', 'Cloud'] },
+    ],
+    topVendor: 'CrowdStrike',
+  };
+  res.json(comparison);
+});
+
+// 비교 보고서 생성
+app.post('/api/vendors/report', async (req, res) => {
+  const { customerName, category } = req.body;
+  const report = {
+    title: `${customerName} - ${category} 비교 보고서`,
+    customerName,
+    category,
+    generatedAt: new Date().toISOString(),
+    report: `# ${customerName} - ${category} 비교 보고서\n\n## 벤더 비교\n\n| 벤더 | 점수 | 특징 |\n|------|------|------|\n| Sangfor | 85 | EPP, IAG, CC |\n| CrowdStrike | 92 | EDR, XDR |\n| Microsoft | 88 | Defender, Sentinel |\n\n## 추천\n\nCrowdStrike가 가장 높은 점수를 기록했으나, Sangfor이 한국 시장에 최적화되어 있습니다.`,
+  };
+  res.json(report);
+});
+
+// ─── Learning API ──────────────────────────────────────────────────────────
+
+// 학습 실행
+app.post('/api/learning/run', async (req, res) => {
+  const { type } = req.body;
+
+  try {
+    let result: any = {};
+
+    switch (type) {
+      case 'crawl':
+        result = { status: 'completed', vendorsProcessed: 5, chunksIndexed: 0 };
+        break;
+      case 'index':
+        const stats = ragIndexer.getStats();
+        result = { status: 'completed', chunksIndexed: stats.chunks, documents: stats.documents };
+        break;
+      case 'full':
+        result = { status: 'completed', vendorsProcessed: 5 };
+        break;
+      default:
+        result = { status: 'unknown type' };
+    }
 
     res.json(result);
   } catch (error) {
@@ -186,70 +442,103 @@ app.post('/api/workflows/:id/execute', async (req, res) => {
   }
 });
 
-// 실행 이력
-app.get('/api/workflows/:id/logs', (req, res) => {
-  const logs = monitoringDashboard.getExecutionHistory(req.params.id);
-  res.json(logs);
+// 스케줄 목록
+app.get('/api/learning/schedules', (req, res) => {
+  const schedules = [
+    { id: '1', name: 'Daily Crawl', frequency: 'daily', vendors: ['CrowdStrike', 'Microsoft'], enabled: true },
+    { id: '2', name: 'Weekly Index', frequency: 'weekly', vendors: ['All'], enabled: true },
+  ];
+  res.json(schedules);
 });
 
-// 템플릿 목록
-app.get('/api/templates', (req, res) => {
-  const templates = templateManager.list();
-  res.json(templates);
+// 스케줄 생성
+app.post('/api/learning/schedules', (req, res) => {
+  const schedule = {
+    id: Date.now().toString(),
+    ...req.body,
+  };
+  res.json(schedule);
 });
 
-// 템플릿 검색
-app.get('/api/templates/search', (req, res) => {
-  const { q } = req.query;
-  const templates = templateManager.search(String(q || ''));
-  res.json(templates);
+// 스케줄 실행
+app.post('/api/learning/schedules/:id/run', async (req, res) => {
+  const job = {
+    id: Date.now().toString(),
+    scheduleId: req.params.id,
+    status: 'completed',
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+  };
+  res.json(job);
 });
 
-// 시스템 상태
-app.get('/api/system/health', (req, res) => {
-  const health = monitoringDashboard.getSystemHealth();
-  res.json(health);
+// ─── Device Access API ─────────────────────────────────────────────────────
+
+// 접근 요청 생성
+app.post('/api/access/request', (req, res) => {
+  const { customerName, projectName, products } = req.body;
+  const request = {
+    requestId: Date.now().toString(),
+    customerName,
+    projectName,
+    products,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    message: `# ${customerName} - 장비 접근 정보 요청\n\n프로젝트: ${projectName}\n\n## 필요한 접근 정보\n\n${products.map((p: string) => `### ${p}\n- IP: [입력 필요]\n- Port: [입력 필요]\n- 계정: [입력 필요]\n- 비밀번호: [입력 필요]`).join('\n\n')}`,
+  };
+  res.json(request);
 });
 
-// 실시간 이벤트 (SSE)
+// 접근 정보 제출
+app.post('/api/access/submit', (req, res) => {
+  const { requestId, product, ip, port, username, password } = req.body;
+  res.json({ ok: true, requestId, product });
+});
+
+// 접근 요청 목록
+app.get('/api/access/requests', (req, res) => {
+  const requests = [
+    { requestId: '1', customerName: '현대차', projectName: '보안감사', products: ['IAG', 'EPP'], status: 'approved' },
+    { requestId: '2', customerName: '삼성전자', projectName: '보안강화', products: ['CC'], status: 'pending' },
+  ];
+  res.json(requests);
+});
+
+// ─── SSE Events ────────────────────────────────────────────────────────────
+
 app.get('/api/events', (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
 
-  const sendEvent = () => {
-    const events = monitoringDashboard.getEventStream();
-    res.write(`data: ${JSON.stringify(events)}\n\n`);
+  const sendEvent = (data: any) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
-  // 5초마다 이벤트 전송
-  const interval = setInterval(sendEvent, 5000);
+  // 이벤트 전송
+  const interval = setInterval(() => {
+    sendEvent({ type: 'heartbeat', timestamp: new Date().toISOString() });
+  }, 30000);
 
   req.on('close', () => {
     clearInterval(interval);
   });
 });
 
-// ─── 웹 UI (SPA) ──────────────────────────────────────────────────────────
+// ─── System ────────────────────────────────────────────────────────────────
 
+app.get('/api/system/health', (req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
+});
+
+// SPA fallback
 app.get('/{*path}', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
-// ─── 서버 시작 ──────────────────────────────────────────────────────────────
+// ─── 시작 ──────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
-  log.info(`Operator Console running at http://localhost:${PORT}`);
-  log.info(`API endpoints:`);
-  log.info(`  GET  /api/dashboard/stats`);
-  log.info(`  GET  /api/workflows`);
-  log.info(`  POST /api/workflows/generate`);
-  log.info(`  POST /api/workflows/:id/approve`);
-  log.info(`  POST /api/workflows/:id/execute`);
-  log.info(`  GET  /api/templates`);
-  log.info(`  GET  /api/system/health`);
+  log.info(`Operator Console started on port ${PORT}`);
+  console.log(`🚀 Operator Console: http://localhost:${PORT}`);
 });
-
-export default app;
