@@ -35,3 +35,4 @@ export * from './proposal-generator.js';
 export * from './compliance-monitor.js';
 export * from './vendor-learner.js';
 export * from './sangfor-auto-config.js';
+export * from './device-access-manager.js';
