@@ -36,3 +36,6 @@ export * from './compliance-monitor.js';
 export * from './vendor-learner.js';
 export * from './sangfor-auto-config.js';
 export * from './device-access-manager.js';
+export * from './manual-qa.js';
+export * from './device-menu-capture.js';
+export * from './setting-guide-generator.js';
