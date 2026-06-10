@@ -14,6 +14,8 @@ export interface LLMConfig {
   maxTokens?: number;
   temperature?: number;
   timeout?: number;
+  retryCount?: number;   // 재시도 횟수
+  retryDelay?: number;   // 재시도 대기 시간 (ms)
 }
 
 export interface ChatMessage {
@@ -50,12 +52,17 @@ const DEFAULT_CONFIG: LLMConfig = {
   maxTokens: 4096,
   temperature: 0.3,
   timeout: 120000,
+  retryCount: 2,
+  retryDelay: 1000,
 };
 
 // ─── LLM 클라이언트 ────────────────────────────────────────────────────────
 
 export class LLMClient {
   private config: LLMConfig;
+  private cachedModel: string | null = null;
+  private lastModelCheck: number = 0;
+  private static readonly MODEL_CACHE_TTL = 30000; // 30초 캐시
 
   constructor(config?: Partial<LLMConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -65,7 +72,9 @@ export class LLMClient {
   // 사용 가능한 모델 목록 조회
   async listModels(): Promise<ModelInfo[]> {
     try {
-      const response = await fetch(`${this.config.baseUrl}/models`);
+      const response = await fetch(`${this.config.baseUrl}/models`, {
+        signal: AbortSignal.timeout(5000),
+      });
       if (!response.ok) {
         throw new Error(`Failed to list models: ${response.statusText}`);
       }
@@ -77,12 +86,24 @@ export class LLMClient {
     }
   }
 
-  // 현재 로드된 모델 확인
+  // 현재 로드된 모델 확인 (캐시 사용)
   async getCurrentModel(): Promise<string | null> {
+    const now = Date.now();
+    
+    // 캐시 유효하면 재사용
+    if (this.cachedModel && now - this.lastModelCheck < LLMClient.MODEL_CACHE_TTL) {
+      return this.cachedModel;
+    }
+
     try {
       const models = await this.listModels();
       if (models.length > 0) {
-        return models[0].id;
+        // 임베딩 모델 제외하고 첫 번째 모델 사용
+        const chatModel = models.find(m => !m.id.includes('embedding'));
+        this.cachedModel = chatModel?.id || models[0].id;
+        this.lastModelCheck = now;
+        log.info(`Detected model: ${this.cachedModel}`);
+        return this.cachedModel;
       }
       return null;
     } catch {
@@ -90,7 +111,7 @@ export class LLMClient {
     }
   }
 
-  // Chat Completion 요청
+  // Chat Completion 요청 (재시도 로직 포함)
   async chat(messages: ChatMessage[], options?: {
     model?: string;
     maxTokens?: number;
@@ -114,32 +135,46 @@ export class LLMClient {
 
     log.info(`Chat request: model=${model}, messages=${messages.length}, maxTokens=${maxTokens}`);
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
+    let lastError: Error | null = null;
+    const maxRetries = this.config.retryCount || 0;
 
-      const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
-      clearTimeout(timeoutId);
+        const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`LLM API error: ${response.status} - ${errorText}`);
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`LLM API error: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json();
+        log.info(`Chat response: ${data.usage?.total_tokens || 0} tokens`);
+
+        return data;
+      } catch (error) {
+        lastError = error as Error;
+        
+        if (attempt < maxRetries) {
+          const delay = (this.config.retryDelay || 1000) * Math.pow(2, attempt);
+          log.warn(`Chat request failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms: ${error}`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        } else {
+          log.error(`Chat request failed after ${maxRetries + 1} attempts: ${error}`);
+        }
       }
-
-      const data = await response.json();
-      log.info(`Chat response: ${data.usage?.total_tokens || 0} tokens`);
-
-      return data;
-    } catch (error) {
-      log.error(`Chat request failed: ${error}`);
-      throw error;
     }
+
+    throw lastError || new Error('Chat request failed');
   }
 
   // 간단한 텍스트 완료
@@ -164,8 +199,10 @@ export class LLMClient {
     }
     messages.push({ role: 'user', content: prompt });
 
+    // response_format 미사용 (LM Studio 호환성 향상)
+    // 대신 프롬프트에 JSON 출력을 명시적으로 요청
+    const jsonPrompt = prompt + '\n\n IMPORTANT: Respond with valid JSON only. No markdown, no explanation.';
     const result = await this.chat(messages, {
-      responseFormat: { type: 'json_object' },
       temperature: 0.1, // JSON은 낮은 temperature
     });
 
@@ -179,11 +216,22 @@ export class LLMClient {
       if (jsonMatch) {
         return JSON.parse(jsonMatch[1].trim()) as T;
       }
+      
+      // 중괄호로 감싸진 JSON 추출 시도
+      const braceMatch = content.match(/\{[\s\S]*\}/);
+      if (braceMatch) {
+        try {
+          return JSON.parse(braceMatch[0]) as T;
+        } catch {
+          // 파싱 실패
+        }
+      }
+      
       throw new Error(`Failed to parse JSON response: ${content.substring(0, 200)}`);
     }
   }
 
-  // 연결 상태 확인
+  // 연결 상태 확인 (빠른 테스트)
   async healthCheck(): Promise<boolean> {
     try {
       const response = await fetch(`${this.config.baseUrl}/models`, {
@@ -192,6 +240,31 @@ export class LLMClient {
       return response.ok;
     } catch {
       return false;
+    }
+  }
+
+  // 간단한 테스트 요청으로 실제 사용 가능 여부 확인
+  async testConnection(): Promise<{ available: boolean; model: string | null; latency: number }> {
+    const start = Date.now();
+    try {
+      const model = await this.getCurrentModel();
+      if (!model) {
+        return { available: false, model: null, latency: Date.now() - start };
+      }
+
+      // 간단한 테스트 요청
+      const result = await this.chat(
+        [{ role: 'user', content: 'Say "ok"' }],
+        { maxTokens: 10, temperature: 0 }
+      );
+
+      return {
+        available: true,
+        model,
+        latency: Date.now() - start,
+      };
+    } catch {
+      return { available: false, model: null, latency: Date.now() - start };
     }
   }
 
@@ -205,6 +278,12 @@ export class LLMClient {
     this.config = { ...this.config, ...config };
     log.info(`Updated LLM config: ${this.config.baseUrl}`);
   }
+
+  // 캐시 초기화
+  clearCache(): void {
+    this.cachedModel = null;
+    this.lastModelCheck = 0;
+  }
 }
 
 // ─── 싱글톤 인스턴스 ────────────────────────────────────────────────────────
@@ -216,4 +295,9 @@ export function getLLMClient(config?: Partial<LLMConfig>): LLMClient {
     defaultClient = new LLMClient(config);
   }
   return defaultClient;
+}
+
+// 싱글톤 초기화 함수
+export function resetLLMClient(): void {
+  defaultClient = null;
 }

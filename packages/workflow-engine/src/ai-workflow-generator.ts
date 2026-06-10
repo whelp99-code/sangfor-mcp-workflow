@@ -26,6 +26,7 @@ export class AIWorkflowGenerator {
   private toolRegistry: ToolRegistry;
   private dependencyAnalyzer: DependencyAnalyzer;
   private llm: LLMClient;
+  private useAI: boolean = true; // AI 사용 여부 플래그
 
   constructor(toolRegistry?: ToolRegistry, llmConfig?: { baseUrl: string }) {
     this.toolRegistry = toolRegistry || new ToolRegistry();
@@ -78,24 +79,28 @@ export class AIWorkflowGenerator {
   // ─── 2단계: AI 기반 워크플로우 생성 ────────────────────────────────────────
 
   async generateWorkflow(profile: CustomerProfile): Promise<Workflow> {
-    log.info(`Generating AI workflow for: ${profile.customerName}`);
+    log.info(`Generating workflow for: ${profile.customerName}`);
 
-    // LLM 연결 확인
+    // LLM 연결 확인 (healthCheck만으로 충분)
     const isHealthy = await this.llm.healthCheck();
 
     let workflow: Workflow;
 
-    if (isHealthy) {
+    if (isHealthy && this.useAI) {
       // AI 기반 생성
-      log.info('Using LLM-based workflow generation');
+      log.info('✅ LLM available - Using AI-based workflow generation');
       workflow = await this.generateWithAI(profile);
     } else {
       // fallback: 규칙 기반
-      log.warn('LLM not available, falling back to rule-based generation');
+      if (!isHealthy) {
+        log.warn('⚠️ LLM not available, falling back to rule-based generation');
+      } else {
+        log.info('ℹ️ AI generation disabled, using rule-based generation');
+      }
       workflow = await this.generateWithRules(profile);
     }
 
-    log.info(`Workflow generated: ${workflow.steps.length} steps`);
+    log.info(`Workflow generated: ${workflow.steps.length} steps (mode: ${workflow.reasoning?.includes('AI 기반') ? 'AI' : 'Rules'})`);
     return workflow;
   }
 
@@ -119,7 +124,7 @@ export class AIWorkflowGenerator {
         estimatedCost: string;
       }>(userPrompt, systemPrompt);
 
-      log.info(`AI selected ${aiResult.selectedTools.length} tools`);
+      log.info(`AI selected ${aiResult.selectedTools.length} tools: ${aiResult.selectedTools.join(', ')}`);
 
       // AI가 선택한 tool로 워크플로우 구성
       const selectedTools = aiResult.selectedTools
@@ -138,7 +143,7 @@ export class AIWorkflowGenerator {
         description: `AI 기반 자동 생성 워크플로우. ${profile.products.join(', ')} 제품 설정.`,
         customerProfile: profile,
         steps: orderedSteps,
-        reasoning: aiResult.reasoning,
+        reasoning: `## AI 기반 워크플로우 생성\n\n${aiResult.reasoning}`,
         estimatedDuration: aiResult.estimatedDuration,
         estimatedCost: aiResult.estimatedCost,
         status: 'draft',
@@ -434,9 +439,21 @@ Respond with JSON only.`;
   }
 
   // LLM 상태 확인
-  async checkLLMStatus(): Promise<{ available: boolean; model: string | null }> {
+  async checkLLMStatus(): Promise<{ available: boolean; model: string | null; latency?: number }> {
+    const start = Date.now();
     const available = await this.llm.healthCheck();
     const model = available ? await this.llm.getCurrentModel() : null;
-    return { available, model };
+    return { available, model, latency: Date.now() - start };
+  }
+
+  // AI 사용 설정
+  setUseAI(use: boolean): void {
+    this.useAI = use;
+    log.info(`AI generation ${use ? 'enabled' : 'disabled'}`);
+  }
+
+  // LLM 클라이언트 조회
+  getLLMClient(): LLMClient {
+    return this.llm;
   }
 }
