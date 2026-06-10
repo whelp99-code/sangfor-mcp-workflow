@@ -2,7 +2,8 @@
  * Compliance Tracker — Compliance 추이 관리 시스템
  */
 
-import { nowId, nowISO, createLogger, readFileSync, writeFileSync, existsSync } from '@sangfor/workflow-shared';
+import { nowId, nowISO, createLogger } from '@sangfor/workflow-shared';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 
 const log = createLogger('compliance-tracker');
 

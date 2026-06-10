@@ -39,3 +39,7 @@ export * from './device-access-manager.js';
 export * from './manual-qa.js';
 export * from './device-menu-capture.js';
 export * from './setting-guide-generator.js';
+export * from './web-crawler.js';
+export * from './rag-indexer.js';
+export * from './ai-feature-extractor.js';
+export * from './learning-scheduler.js';
