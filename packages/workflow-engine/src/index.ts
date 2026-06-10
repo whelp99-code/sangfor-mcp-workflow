@@ -28,3 +28,8 @@ export * from './mcp-client.js';
 export * from './excel-parser.js';
 export * from './vendor-comparator.js';
 export * from './report-generator.js';
+export * from './compliance-tracker.js';
+export * from './compliance-change-detector.js';
+export * from './roadmap-generator.js';
+export * from './proposal-generator.js';
+export * from './compliance-monitor.js';
