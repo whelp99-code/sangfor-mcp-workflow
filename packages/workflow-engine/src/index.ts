@@ -33,3 +33,5 @@ export * from './compliance-change-detector.js';
 export * from './roadmap-generator.js';
 export * from './proposal-generator.js';
 export * from './compliance-monitor.js';
+export * from './vendor-learner.js';
+export * from './sangfor-auto-config.js';
