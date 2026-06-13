@@ -60,15 +60,16 @@ describe('LLM Client — LM Studio 연결', () => {
   });
 
   it('should get current model', async () => {
+    if (!(await isLmStudioReady(client))) {
+      console.log('Skipping get current model - LM Studio not available');
+      return;
+    }
+
     const model = await client.getCurrentModel();
     console.log(`Current model: ${model}`);
-    
-    // LM Studio가 실행 중이면 모델이 있어야 함
-    if (await client.healthCheck()) {
-      expect(model).toBeTruthy();
-      // 임베딩 모델이 아닌 채팅 모델이어야 함
-      expect(model).not.toContain('embedding');
-    }
+
+    expect(model).toBeTruthy();
+    expect(model).not.toContain('embedding');
   });
 
   it('should test connection with simple prompt', async () => {
