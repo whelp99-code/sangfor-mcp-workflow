@@ -78,7 +78,7 @@ export class LLMClient {
       if (!response.ok) {
         throw new Error(`Failed to list models: ${response.statusText}`);
       }
-      const data = await response.json();
+      const data = (await response.json()) as { data?: ModelInfo[] };
       return data.data || [];
     } catch (error) {
       log.error(`Failed to list models: ${error}`);
@@ -157,7 +157,7 @@ export class LLMClient {
           throw new Error(`LLM API error: ${response.status} - ${errorText}`);
         }
 
-        const data = await response.json();
+        const data = (await response.json()) as ChatCompletion;
         log.info(`Chat response: ${data.usage?.total_tokens || 0} tokens`);
 
         return data;

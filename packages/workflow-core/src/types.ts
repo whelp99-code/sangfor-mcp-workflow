@@ -82,7 +82,7 @@ export type AlertSeverity = 'info' | 'warning' | 'critical';
 export interface AlertCondition {
   field: string;
   operator: AlertOperator;
-  value: string | number;
+  value: string | number | boolean;
   severity: AlertSeverity;
 }
 

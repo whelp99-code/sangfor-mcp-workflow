@@ -8,6 +8,7 @@ import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import { join, dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createLogger } from '@sangfor/workflow-shared';
 
@@ -72,7 +73,10 @@ const sangforAutoConfig = new SangforAutoConfig();
 const deviceAccessManager = new DeviceAccessManager();
 const deviceMenuCapture = new DeviceMenuCapture();
 const settingGuideGenerator = new SettingGuideGenerator();
-const vendorComparator = new VendorComparator();
+const vendorDB = JSON.parse(
+  readFileSync(join(__dirname, '../../../data/vendors/vendor-database.json'), 'utf8'),
+);
+const vendorComparator = new VendorComparator(vendorDB);
 const reportGenerator = new ReportGenerator();
 const webCrawler = new WebCrawler();
 const ragIndexer = new RAGIndexer();
@@ -148,6 +152,10 @@ app.post('/api/workflows/from-template', (req, res) => {
     similarCases: [],
     metadata: {},
   });
+
+  if (!workflow) {
+    return res.status(400).json({ error: 'Failed to create workflow from template' });
+  }
 
   workflows.set(workflow.id, workflow);
   monitoringDashboard.registerWorkflow(workflow);

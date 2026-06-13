@@ -122,7 +122,7 @@ export async function parseExcelFile(filePath: string): Promise<ParseResult> {
   log.info(`Parsing Excel: ${filePath}`);
   log.info(`Total rows: ${data.length}`);
 
-  const rows = parseExcelWithResultFilter(data);
+  const rows = parseExcelWithResultFilter(data as unknown[][]);
   const result = analyzeExcelData(rows);
 
   log.info(`Extracted ${rows.length} items (Result filter applied)`);
