@@ -8,7 +8,7 @@ import { Router, Request, Response } from 'express';
 import { createLogger } from '@sangfor/workflow-shared';
 
 const log = createLogger('health-routes');
-const router = Router();
+const router: Router = Router();
 
 // ─── 모킹 데이터 ──────────────────────────────────────────────────────────
 
@@ -82,10 +82,11 @@ router.get('/', async (req: Request, res: Response) => {
  */
 router.get('/:id', async (req: Request, res: Response) => {
   try {
-    const device = MOCK_DEVICES[req.params.id];
+    const deviceId = String(req.params.id ?? '');
+    const device = MOCK_DEVICES[deviceId];
     
     if (!device) {
-      log.warn(`Device not found: ${req.params.id}`);
+      log.warn(`Device not found: ${deviceId}`);
       return res.status(404).json({ error: 'Device not found' });
     }
     
