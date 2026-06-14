@@ -12,8 +12,8 @@ import { join, dirname } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createLogger } from '@sangfor/workflow-shared';
-import { healthRoutes } from './routes/index.js';
-import { apiKeyAuth } from './middleware/auth.js';
+import { healthRoutes } from './routes';
+import { apiKeyAuth } from './middleware/auth';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -91,28 +91,13 @@ const workflows = new Map<string, Workflow>();
 
 // ─── REST API ──────────────────────────────────────────────────────────────
 
-// 공개 엔드포인트 (인증 불필요)
-app.get("/api/system/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
-
-// 보호 엔드포인트 (인증 필요)
-app.use("/api/devices/health", apiKeyAuth, healthRoutes);
-app.use("/api/workflows", apiKeyAuth);
-app.use("/api/compliance", apiKeyAuth);
-app.use("/api/templates", apiKeyAuth);
-app.use("/api/manual", apiKeyAuth);
-app.use("/api/device", apiKeyAuth);
-app.use("/api/guide", apiKeyAuth);
-app.use("/api/vendors", apiKeyAuth);
-app.use("/api/learning", apiKeyAuth);
-app.use("/api/access", apiKeyAuth);
-
 // 대시보드 통계
-app.get("/api/dashboard/stats", (req, res) => {
+app.get('/api/dashboard/stats', (req, res) => {
   const stats = monitoringDashboard.getStats();
   res.json(stats);
 });
+
+// 워크플로우 목록
 app.get('/api/workflows', (req, res) => {
   const summaries = monitoringDashboard.getWorkflowSummaries();
   res.json(summaries);
