@@ -235,8 +235,32 @@ export const PRODUCT_URLS: Record<string, string> = {
   CC: 'https://10.80.1.107',
 };
 
+/**
+ * 제품 인증정보 — process.env에서 읽어온다.
+ * .env 파일에 EPP_USERNAME, EPP_PASSWORD, IAG_USERNAME, IAG_PASSWORD, CC_USERNAME, CC_PASSWORD를 설정해야 한다.
+ */
 export const PRODUCT_CREDENTIALS: Record<string, { username: string; password: string }> = {
-  EPP: { username: 'admin', password: 'Itac123!@#' },
-  IAG: { username: 'admin', password: 'Itac123#@!' },
-  CC: { username: 'admin', password: 'Itac123!@#' },
+  EPP: {
+    username: process.env.EPP_USERNAME || '',
+    password: process.env.EPP_PASSWORD || '',
+  },
+  IAG: {
+    username: process.env.IAG_USERNAME || '',
+    password: process.env.IAG_PASSWORD || '',
+  },
+  CC: {
+    username: process.env.CC_USERNAME || '',
+    password: process.env.CC_PASSWORD || '',
+  },
 };
+
+/** 인증정보가 올바르게 설정되었는지 검증 */
+export function validateCredentials(product: string): void {
+  const cred = PRODUCT_CREDENTIALS[product];
+  if (!cred || !cred.username || !cred.password) {
+    throw new Error(
+      `Missing credentials for ${product}. ` +
+      `Set ${product}_USERNAME and ${product}_PASSWORD in .env`
+    );
+  }
+}

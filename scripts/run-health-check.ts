@@ -8,6 +8,9 @@
  *   pnpm run health:check -- --all
  */
 
+// .env 파일 로드 (인증정보 등)
+import 'dotenv/config';
+
 import {
   runHealthCheck,
   createDefaultHealthCheckConfig,

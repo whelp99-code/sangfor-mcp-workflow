@@ -4,8 +4,11 @@
  * sangfor-engineer-mcp의 MCP tools를 자동으로 호출하는 오케스트레이터
  */
 
+// .env 파일 로드 (인증정보 등)
+import 'dotenv/config';
+
 import readline from 'node:readline';
-import { join } from 'node:path';
+import { join, resolve, isAbsolute } from 'node:path';
 
 // ─── 패키지 imports ─────────────────────────────────────────────────────────
 
@@ -44,6 +47,66 @@ const SANGFOR_MCP_SERVER_PATH = join(
   process.env.HOME || '/Users/jmpark',
   'Documents/Playground/whelp99-code-sangfor-engineer-mcp/apps/mcp-server/src/index.ts'
 );
+
+// ─── 인증 설정 (Issue #2: MCP 인증) ─────────────────────────────────────────
+
+const MCP_API_KEY = process.env.MCP_API_KEY || '';
+
+function validateAuth(params?: Record<string, unknown>): void {
+  if (!MCP_API_KEY) return; // 키가 설정되지 않으면 인증 비활성 (개발 모드)
+  const provided = (params as any)?.authKey;
+  if (provided !== MCP_API_KEY) {
+    throw new Error('Authentication failed: invalid or missing authKey');
+  }
+}
+
+// ─── 경로 순회 방지 설정 (Issue #3) ──────────────────────────────────────────
+
+const DEFAULT_ALLOWED_DIRS: string[] = [
+  process.cwd(),
+  join(process.env.HOME || '/Users/jmpark', 'Documents'),
+];
+
+const ALLOWED_FILE_DIRS: string[] = process.env.ALLOWED_FILE_DIRS
+  ? process.env.ALLOWED_FILE_DIRS.split(',').map((d) => d.trim())
+  : DEFAULT_ALLOWED_DIRS;
+
+function validateFilePath(filePath: string): string {
+  if (!filePath || typeof filePath !== 'string') {
+    throw new Error('filePath is required and must be a string');
+  }
+
+  // null bytes 차단
+  if (filePath.includes('\0')) {
+    throw new Error('Invalid file path: null bytes not allowed');
+  }
+
+  // 경로 순회(..) 차단
+  if (filePath.includes('..')) {
+    throw new Error('Path traversal detected: ".." is not allowed in file paths');
+  }
+
+  // 절대 경로로 변환
+  const resolved = isAbsolute(filePath) ? resolve(filePath) : resolve(process.cwd(), filePath);
+
+  // 허용된 디렉토리 내에 있는지 확인
+  const isAllowed = ALLOWED_FILE_DIRS.some((dir) => resolved.startsWith(resolve(dir)));
+  if (!isAllowed) {
+    throw new Error(
+      `Access denied: file path "${filePath}" is outside allowed directories. ` +
+      `Allowed: ${ALLOWED_FILE_DIRS.join(', ')}`
+    );
+  }
+
+  // .xlsx / .xls / .csv 만 허용
+  const allowedExtensions = ['.xlsx', '.xls', '.csv'];
+  const ext = resolved.toLowerCase().slice(resolved.lastIndexOf('.'));
+  if (!allowedExtensions.includes(ext)) {
+    throw new Error(`Invalid file type "${ext}". Allowed: ${allowedExtensions.join(', ')}`);
+  }
+
+  return resolved;
+}
 
 // ─── 인스턴스 생성 ──────────────────────────────────────────────────────────
 
@@ -345,7 +408,9 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       required: ['filePath'],
     },
     handler: async (args: { filePath: string }) => {
-      return parseExcelFile(args.filePath);
+      // 경로 순회 방지: filePath 검증
+      const safePath = validateFilePath(args.filePath);
+      return parseExcelFile(safePath);
     },
   },
 
@@ -500,6 +565,9 @@ async function handle(req: JsonRpcRequest) {
     }
 
     if (req.method === 'tools/call') {
+      // 인증 검증 (MCP_API_KEY가 설정된 경우)
+      validateAuth(req.params);
+
       const name = req.params?.name;
       const args = req.params?.arguments ?? {};
       const tool = tools[name];
