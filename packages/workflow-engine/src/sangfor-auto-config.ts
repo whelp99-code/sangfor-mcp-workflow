@@ -360,7 +360,7 @@ export class SangforAutoConfig {
       log.info('Chrome CDP 연결 성공');
 
       // 2) 로그인 (이미 로그인된 경우 스킵)
-      const hasLoginForm = await page.locator('input[type="password"]').count() > 0;  // [FIX #5]
+      const hasLoginForm = await this.hasInteractiveLoginForm(page);  // [FIX #5]
       if (hasLoginForm) {
         await this.login(page, credentials);
         log.info('로그인 성공');
@@ -600,14 +600,46 @@ export class SangforAutoConfig {
     await loginBtn.click();
     await page.waitForTimeout(5000);
 
-    // [FIX #5] 로그인 감지 — password + login button 조합
-    const stillHasPassword = await page.locator('input[type="password"]').count() > 0;
-    const stillHasLoginBtn = await page.locator(
-      'button:has-text("Log In"), button:has-text("로그인"), input[id="button"]',
-    ).count() > 0;
-    if (stillHasPassword && stillHasLoginBtn) {
+    // [FIX #5] 로그인 감지 — 실제 로그인 폼이 계속 보이는 경우만 실패 처리
+    if (await this.hasInteractiveLoginForm(page)) {
       throw new Error('로그인 실패 — 자격 증명을 확인하세요.');
     }
+  }
+
+  private async hasInteractiveLoginForm(page: Page): Promise<boolean> {
+    return page.evaluate(() => {
+      const visible = (el: Element | null): el is HTMLElement => {
+        if (!(el instanceof HTMLElement)) return false;
+        if (el.hidden || el.getAttribute('aria-hidden') === 'true') return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+
+      const passwordInputs = Array.from(document.querySelectorAll<HTMLInputElement>(
+        'input[type="password"]:not([disabled]):not([readonly])',
+      )).filter(visible);
+
+      return passwordInputs.some((passwordInput) => {
+        const container = passwordInput.closest('form, .login, .login-form, .x-window, .x-panel, .x-form, table, body');
+        const scope = container ?? document.body;
+        const hasUserInput = Array.from(scope.querySelectorAll<HTMLInputElement>(
+          'input[name*="user" i], input[name*="account" i], input[name*="login" i], input[name*="name" i], input[type="text"]',
+        )).some(visible);
+        const hasSubmitControl = Array.from(scope.querySelectorAll<HTMLElement>(
+          'button, input[type="submit"], input[type="button"], a[role="button"], .x-btn, [role="button"]',
+        )).some((el) => {
+          if (!visible(el)) return false;
+          const text = `${el.textContent ?? ''} ${(el as HTMLInputElement).value ?? ''}`.trim().toLowerCase();
+          return /log\s*in|login|sign\s*in|로그인|登录|登錄/.test(text) || el.getAttribute('type') === 'submit';
+        });
+        const formLooksLikeLogin = container instanceof HTMLFormElement
+          && /login|auth|session/i.test(`${container.id} ${container.className} ${container.getAttribute('action') ?? ''}`);
+
+        return hasUserInput && (hasSubmitControl || formLooksLikeLogin);
+      });
+    });
   }
 
   private async navigateToHash(page: Page, hashRoute: string): Promise<void> {
@@ -755,19 +787,41 @@ export class SangforAutoConfig {
 
     if (!found) {
       // 3) ExtJS 커스텀 드롭다운 폴백
-      const extJsFound = await page.evaluate((label: string) => {
+      const extJsFound = await page.evaluate((opts: { label: string; value: string }) => {
+        const visible = (el: Element | null): el is HTMLElement => {
+          if (!(el instanceof HTMLElement)) return false;
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+        };
+
+        const findLabelElement = () => Array.from(document.querySelectorAll('label, span, td, div'))
+          .find(el => (el.textContent?.trim() ?? '').includes(opts.label));
+
+        const labelEl = findLabelElement();
+        if (labelEl) {
+          const scope = labelEl.closest('tr, .x-form-item, .x-field, .form-group, .field, .x-container')
+            ?? labelEl.parentElement;
+          const triggers = Array.from(scope?.querySelectorAll<HTMLElement>(
+            '.x-form-arrow-trigger, .x-form-trigger, .x-combo, [role="combobox"], input[readonly]',
+          ) ?? []).filter(visible);
+          for (const trigger of triggers) {
+            trigger.click();
+          }
+        }
+
         const comboLists = Array.from(document.querySelectorAll('.x-combo-list, .x-boundlist, [role="listbox"]'));
-        for (const list of comboLists) {
+        for (const list of comboLists.filter(visible)) {
           const items = Array.from(list.querySelectorAll('.x-combo-list-item, .x-boundlist-item, [role="option"]'));
           for (const item of items) {
-            if ((item.textContent ?? '').includes(label)) {
+            if ((item.textContent ?? '').includes(opts.value)) {
               (item as HTMLElement).click();
               return true;
             }
           }
         }
         return false;
-      }, action.value as string);
+      }, { label: action.label, value: action.value as string });
 
       if (!extJsFound) log.warn(`셀렉트 미발견 또는 옵션 없음: ${action.label} = ${action.value}`);
     }
@@ -781,7 +835,9 @@ export class SangforAutoConfig {
     if (action.selector) {
       const locator = page.locator(action.selector);
       if (await locator.count() > 0) {
-        await locator.fill(action.value as string);
+        await locator.fill(action.value as string).catch(async () => {
+          await this.fillExtJsInput(page, action.label, action.value as string, action.selector);
+        });
         return;
       }
     }
@@ -800,11 +856,60 @@ export class SangforAutoConfig {
 
     const element = inputHandle.asElement();
     if (element) {
-      await (element as ElementHandle<HTMLInputElement>).fill(action.value as string);
+      await (element as ElementHandle<HTMLInputElement>).fill(action.value as string).catch(async () => {
+        await this.fillExtJsInput(page, action.label, action.value as string);
+      });
       await element.dispose();
     } else {
-      log.warn(`입력 필드 미발견: ${action.label}`);
+      const filled = await this.fillExtJsInput(page, action.label, action.value as string);
+      if (!filled) log.warn(`입력 필드 미발견: ${action.label}`);
     }
+  }
+
+  private async fillExtJsInput(
+    page: Page,
+    label: string,
+    value: string,
+    selector?: string,
+  ): Promise<boolean> {
+    return page.evaluate((opts: { label: string; value: string; selector?: string }) => {
+      const visible = (el: Element | null): el is HTMLElement => {
+        if (!(el instanceof HTMLElement)) return false;
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      };
+
+      const candidates: HTMLElement[] = [];
+      if (opts.selector) {
+        const selected = document.querySelector<HTMLElement>(opts.selector);
+        if (selected) candidates.push(selected);
+      }
+
+      const labelEl = Array.from(document.querySelectorAll('label, span, td, div'))
+        .find(el => (el.textContent?.trim() ?? '').includes(opts.label));
+      if (labelEl) {
+        const scope = labelEl.closest('tr, .x-form-item, .x-field, .form-group, .field, .x-container')
+          ?? labelEl.parentElement;
+        candidates.push(...Array.from(scope?.querySelectorAll<HTMLElement>(
+          'input, textarea, [contenteditable="true"], .x-form-field',
+        ) ?? []));
+      }
+
+      const target = candidates.find(visible);
+      if (!target) return false;
+
+      target.focus();
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+        target.value = opts.value;
+      } else {
+        target.textContent = opts.value;
+      }
+      target.dispatchEvent(new InputEvent('input', { bubbles: true, data: opts.value }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+      target.blur();
+      return true;
+    }, { label, value, selector });
   }
 
   private async actionToggle(page: Page, action: SettingAction): Promise<void> {

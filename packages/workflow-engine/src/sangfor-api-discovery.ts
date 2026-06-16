@@ -202,17 +202,38 @@ export class SangforAPIDiscovery {
   // ── 2단계: HAR 파싱 ──
 
   parseHAR(harPath: string): HAREntry[] {
-    const har = JSON.parse(readFileSync(harPath, 'utf8'));
+    const rawHar = readFileSync(harPath, 'utf8');
+    let har: unknown;
+    try {
+      har = JSON.parse(rawHar);
+    } catch (err) {
+      log.warn(`HAR JSON 파싱 실패: ${harPath} (${err})`);
+      return [];
+    }
+
+    const harEntries = this.getHarLogEntries(har);
+    if (!harEntries.length) {
+      log.warn(`HAR entries 없음 또는 형식 불일치: ${harPath}`);
+      return [];
+    }
+
     const entries: HAREntry[] = [];
 
-    for (const entry of har.log?.entries ?? []) {
+    for (const entry of harEntries) {
       const req = entry.request;
       const res = entry.response;
+      if (!req?.url || !req.method || !res) continue;
 
       const url = req.url;
       if (this.isNoiseRequest(url)) continue;
 
-      const urlObj = new URL(url);
+      let urlObj: URL;
+      try {
+        urlObj = new URL(url);
+      } catch {
+        log.warn(`잘못된 HAR request URL 스킵: ${url}`);
+        continue;
+      }
 
       entries.push({
         request: {
@@ -245,6 +266,29 @@ export class SangforAPIDiscovery {
 
     log.info(`HAR 파싱 완료: ${entries.length}개 요청 (노이즈 필터링 후)`);
     return entries;
+  }
+
+  private getHarLogEntries(har: unknown): Array<{
+    request?: {
+      method?: string;
+      url?: string;
+      headers?: Array<{ name: string; value: string }>;
+      postData?: { text?: string; mimeType?: string };
+    };
+    response?: {
+      status?: number;
+      statusText?: string;
+      headers?: Array<{ name: string; value: string }>;
+      content?: { text?: string; mimeType?: string; size?: number };
+    };
+    time?: number;
+    startedDateTime?: string;
+  }> {
+    if (!har || typeof har !== 'object') return [];
+    const logNode = (har as { log?: unknown }).log;
+    if (!logNode || typeof logNode !== 'object') return [];
+    const entries = (logNode as { entries?: unknown }).entries;
+    return Array.isArray(entries) ? entries : [];
   }
 
   // ── 3단계: LLM 기반 API 분석 (Integuru 패턴) ──

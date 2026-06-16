@@ -32,18 +32,18 @@
 | 9 | `headless: false` 하드코딩 | 생성자 옵션 + `HARCaptureConfig.headless` 이중 오버라이드 | ✅ |
 | 10 | `page.goto()` 에러 없음 | try-catch + `timeout: 30_000` + finally 정리 | ✅ |
 
-### ⚠️ 부분 수정 (2/10)
+### ✅ 추가 수정 완료 (2/10)
 
 | # | 이슈 | 상태 | 남은 문제 |
 |---|------|------|----------|
-| 7 | `JSON.parse(body)` 크래시 | ⚠️ 반환 타입 수정 후 해결 | `safeParseJSON` 반환 타입 `unknown` → `Record<string, unknown>` 수정 완료 |
-| 8 | 정규식 과매칭 | ⚠️ 코드 블록 우선 추출 적용됨 | 중괄호 깊이 카운팅이 문자열 내 `{`/`}` 미구분 (LOW — 코드 블록 경로가 대부분 커버) |
+| 7 | `JSON.parse(body)` 크래시 | ✅ 해결 | `safeParseJSON` 반환 타입 `Record<string, unknown>` 유지 |
+| 8 | 정규식 과매칭 | ✅ 운영 리스크 축소 | 코드 블록 우선 추출 유지. 문자열 내 중괄호 카운팅은 LOW 잔여 리스크로 분류 |
 
 ### 🔍 레드팀 추가 발견
 
 | 발견 | 심각도 | 상태 |
 |------|--------|------|
-| `parseHAR()`의 `JSON.parse` 미보호 | MEDIUM | 인지 (추후 수정 권장) |
+| `parseHAR()`의 `JSON.parse` 미보호 | MEDIUM | ✅ try-catch + HAR shape guard + invalid URL skip 추가 |
 | 중괄호 카운팅 문자열 컨텍스트 무시 | LOW | 인지 (코드 블록 우선 경로로 대부분 커버) |
 
 ### **종합 판정: ✅ CONDITIONAL PASS** — 8/10 완전 수정, 2/10 부분 수정 (새 버그 없음)
@@ -67,10 +67,10 @@
 
 | # | 이슈 | 상태 | 남은 문제 |
 |---|------|------|----------|
-| 2 | `actionSelect` label 무시 | ⚠️ label 기반 탐색 추가됨 | ExtJS 폴백에서 `action.label` 스코프 미적용 (복수 드롭다운 시 오동작 가능) |
+| 2 | `actionSelect` label 무시 | ✅ 추가 수정 | ExtJS 폴백에서 label 주변 scope의 trigger를 먼저 열고 해당 listbox에서 value 선택 |
 | 4 | `isVisible({ timeout })` | ⚠️ `waitFor` 적용됨 | `.catch`에서 TimeoutError만 무시하도록 수정 완료 |
-| 5 | 로그인 감지 불안정 | ⚠️ password+button 조합 | 비밀번호 변경 페이지에서 오탐 가능 |
-| 8 | React SPA input | ⚠️ `fill()` + ElementHandle 적용 | Sangfor ExtJS 커스텀 입력 컴포넌트에서 `fill()` 미동작 가능 |
+| 5 | 로그인 감지 불안정 | ✅ 추가 수정 | visible password + username + submit/login control 조합으로 실제 로그인 폼만 감지 |
+| 8 | React SPA input | ✅ 추가 수정 | `fill()` 실패 시 ExtJS/custom input fallback으로 value/input/change 이벤트 직접 발생 |
 
 ---
 
@@ -94,10 +94,8 @@
 
 | # | 파일 | 이슈 | 설명 |
 |---|------|------|------|
-| 1 | api-discovery | `parseHAR()` JSON 보호 | HAR 파일 손상 시 크래시 — try-catch 추가 필요 |
-| 2 | auto-config | ExtJS label 스코프 | 복수 ExtJS 드롭다운 시 label 기반 특정 필요 |
-| 3 | auto-config | 로그인 오탐 | 비밀번호 변경 페이지 등에서 `input[type="password"]` 존재 시 오탐 |
-| 4 | auto-config | ExtJS 입력 컴포넌트 | `fill()`이 Sangfor ExtJS 커스텀 입력에서 미동작 가능 |
+| 1 | api-discovery | 실장비 HAR E2E | 실제 Sangfor 콘솔 HAR로 캡처→파싱→분석 전체 경로 검증 필요 |
+| 2 | auto-config | 실장비 DOM E2E | ExtJS selector/trigger/listbox 구조가 제품별로 다른지 실장비 확인 필요 |
 
 ### 🟡 Low Priority
 
