@@ -12,6 +12,7 @@
     "lint": "eslint . --ext .ts",
     "build": "tsc -b",
     "health:check": "tsx scripts/run-health-check.ts",
+    "e2e:sangfor": "tsx scripts/run-sangfor-readonly-e2e.ts",
     "pipeline:run": "tsx scripts/run-project-pipeline.ts",
     "wiki:sync": "tsx scripts/run-wiki-sync.ts"
   },

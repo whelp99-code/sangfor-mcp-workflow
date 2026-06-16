@@ -225,6 +225,7 @@ export class SangforAPIDiscovery {
       if (!req?.url || !req.method || !res) continue;
 
       const url = req.url;
+      const method = req.method;
       if (this.isNoiseRequest(url)) continue;
 
       let urlObj: URL;
@@ -238,7 +239,7 @@ export class SangforAPIDiscovery {
       entries.push({
         request: {
           id: nowId('req'),
-          method: req.method,
+          method,
           url,
           path: urlObj.pathname,
           host: urlObj.host,
@@ -247,11 +248,11 @@ export class SangforAPIDiscovery {
           ),
           body: req.postData?.text,
           contentType: req.postData?.mimeType,
-          timestamp: entry.startedDateTime,
+          timestamp: entry.startedDateTime ?? '',
         },
         response: {
-          status: res.status,
-          statusText: res.statusText,
+          status: res.status ?? 0,
+          statusText: res.statusText ?? '',
           headers: Object.fromEntries(
             (res.headers ?? []).map((h: { name: string; value: string }) => [h.name.toLowerCase(), h.value]),
           ),
@@ -260,7 +261,7 @@ export class SangforAPIDiscovery {
           size: res.content?.size ?? 0,
         },
         duration: entry.time ?? 0,
-        startedDateTime: entry.startedDateTime,
+        startedDateTime: entry.startedDateTime ?? '',
       });
     }
 
