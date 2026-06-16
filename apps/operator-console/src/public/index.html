@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sangfor MCP Workflow Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+    .header { background: #1e293b; padding: 16px 24px; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 12px; }
+    .header h1 { font-size: 20px; font-weight: 600; }
+    .header .badge { background: #22c55e; color: #000; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+
+    .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+    .stat-card .label { font-size: 13px; color: #94a3b8; margin-bottom: 4px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; }
+    .stat-card .value.green { color: #22c55e; }
+    .stat-card .value.blue { color: #3b82f6; }
+    .stat-card .value.yellow { color: #eab308; }
+    .stat-card .value.red { color: #ef4444; }
+
+    .nav-tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #334155; padding-bottom: 8px; }
+    .nav-tab { padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all 0.2s; background: transparent; color: #94a3b8; border: none; }
+    .nav-tab:hover { background: #1e293b; color: #e2e8f0; }
+    .nav-tab.active { background: #3b82f6; color: white; }
+
+    .section { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; margin-bottom: 24px; }
+    .section h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .workflow-list { display: flex; flex-direction: column; gap: 8px; }
+    .workflow-item { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: border-color 0.2s; }
+    .workflow-item:hover { border-color: #3b82f6; }
+    .workflow-item .info { flex: 1; }
+    .workflow-item .name { font-weight: 600; margin-bottom: 4px; }
+    .workflow-item .meta { font-size: 13px; color: #94a3b8; }
+    .workflow-item .status { padding: 4px 12px; border-radius: 16px; font-size: 12px; font-weight: 600; }
+    .workflow-item .status.completed { background: #166534; color: #86efac; }
+    .workflow-item .status.rejected { background: #7f1d1d; color: #fca5a5; }
+    .workflow-item .status.draft { background: #1e3a5f; color: #93c5fd; }
+    .workflow-item .status.approved { background: #1e3a5f; color: #93c5fd; }
+    .workflow-item .status.running { background: #713f12; color: #fde047; }
+
+    .template-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .template-card { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; cursor: pointer; transition: border-color 0.2s; }
+    .template-card:hover { border-color: #3b82f6; }
+    .template-card .name { font-weight: 600; margin-bottom: 4px; }
+    .template-card .desc { font-size: 13px; color: #94a3b8; margin-bottom: 8px; }
+    .template-card .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+    .template-card .tag { background: #334155; padding: 2px 8px; border-radius: 4px; font-size: 11px; color: #94a3b8; }
+
+    .btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.2s; }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-success { background: #22c55e; color: #000; }
+    .btn-success:hover { background: #16a34a; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-secondary:hover { background: #475569; }
+    .btn-sm { padding: 4px 8px; font-size: 12px; }
+
+    .timeline { display: flex; flex-direction: column; gap: 8px; }
+    .timeline-item { display: flex; gap: 12px; align-items: flex-start; }
+    .timeline-item .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex-shrink: 0; }
+    .timeline-item .dot.green { background: #22c55e; }
+    .timeline-item .dot.blue { background: #3b82f6; }
+    .timeline-item .dot.yellow { background: #eab308; }
+    .timeline-item .event { font-size: 13px; }
+    .timeline-item .time { font-size: 12px; color: #64748b; }
+
+    .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 100; align-items: center; justify-content: center; }
+    .modal-overlay.active { display: flex; }
+    .modal { background: #1e293b; border-radius: 12px; padding: 24px; width: 700px; max-width: 90vw; border: 1px solid #334155; max-height: 80vh; overflow-y: auto; }
+    .modal h3 { margin-bottom: 16px; }
+    .modal label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 4px; margin-top: 12px; }
+    .modal input, .modal select, .modal textarea { width: 100%; padding: 8px 12px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 14px; font-family: inherit; }
+    .modal textarea { min-height: 80px; resize: vertical; }
+    .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+    .modal .file-upload { border: 2px dashed #334155; border-radius: 8px; padding: 24px; text-align: center; cursor: pointer; transition: border-color 0.2s; }
+    .modal .file-upload:hover { border-color: #3b82f6; }
+    .modal .file-upload.active { border-color: #3b82f6; background: rgba(59,130,246,0.1); }
+    .modal .file-upload input { display: none; }
+    .modal .file-upload .icon { font-size: 32px; margin-bottom: 8px; }
+    .modal .file-upload .text { font-size: 14px; color: #94a3b8; }
+    .modal .file-upload .filename { font-size: 14px; color: #3b82f6; margin-top: 8px; }
+
+    .product-checkboxes { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+    .product-checkboxes label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: #e2e8f0; cursor: pointer; margin: 0; }
+    .product-checkboxes input[type="checkbox"] { width: auto; accent-color: #3b82f6; }
+
+    .requirement-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+    .requirement-item { display: flex; gap: 8px; align-items: center; }
+    .requirement-item input { flex: 1; }
+    .requirement-item .btn { padding: 4px 8px; font-size: 12px; }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+    .result-box { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; margin-top: 12px; }
+    .result-box h4 { font-size: 14px; margin-bottom: 8px; color: #3b82f6; }
+    .result-box pre { font-size: 12px; color: #94a3b8; white-space: pre-wrap; overflow-x: auto; }
+
+    .compliance-bar { height: 24px; background: #334155; border-radius: 12px; overflow: hidden; margin-top: 8px; }
+    .compliance-fill { height: 100%; background: linear-gradient(90deg, #22c55e, #16a34a); transition: width 0.3s; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #000; }
+
+    .menu-tree { font-family: monospace; font-size: 13px; }
+    .menu-tree .menu-item { padding: 4px 8px; cursor: pointer; border-radius: 4px; }
+    .menu-tree .menu-item:hover { background: #334155; }
+    .menu-tree .menu-item.missing { color: #ef4444; }
+    .menu-tree .menu-item.extra { color: #eab308; }
+    .menu-tree .menu-item.match { color: #22c55e; }
+
+    .vendor-card { background: #0f172a; border-radius: 8px; padding: 16px; border: 1px solid #334155; }
+    .vendor-card h4 { font-size: 14px; margin-bottom: 8px; }
+    .vendor-card .features { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+    .vendor-card .feature { background: #1e3a5f; padding: 2px 8px; border-radius: 4px; font-size: 11px; color: #93c5fd; }
+
+    .chat-container { display: flex; flex-direction: column; height: 400px; }
+    .chat-messages { flex: 1; overflow-y: auto; padding: 12px; background: #0f172a; border-radius: 8px; margin-bottom: 12px; }
+    .chat-message { margin-bottom: 8px; }
+    .chat-message.user { text-align: right; }
+    .chat-message .bubble { display: inline-block; padding: 8px 12px; border-radius: 12px; max-width: 80%; font-size: 13px; }
+    .chat-message.user .bubble { background: #3b82f6; color: white; }
+    .chat-message.assistant .bubble { background: #1e293b; color: #e2e8f0; }
+    .chat-input { display: flex; gap: 8px; }
+    .chat-input input { flex: 1; }
+
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #334155; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Sangfor MCP Workflow</h1>
+    <span class="badge" id="systemBadge">Healthy</span>
+    <span style="margin-left:auto; font-size:13px; color:#94a3b8;" id="uptime"></span>
+  </div>
+
+  <div class="container">
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="stat-card"><div class="label">Total Workflows</div><div class="value blue" id="totalWorkflows">0</div></div>
+      <div class="stat-card"><div class="label">Completed</div><div class="value green" id="completedWorkflows">0</div></div>
+      <div class="stat-card"><div class="label">Running</div><div class="value yellow" id="runningWorkflows">0</div></div>
+      <div class="stat-card"><div class="label">Steps Executed</div><div class="value" id="totalSteps">0</div></div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="nav-tab active" onclick="switchTab('workflows')">Workflows</button>
+      <button class="nav-tab" onclick="switchTab('compliance')">Compliance</button>
+      <button class="nav-tab" onclick="switchTab('manual')">Manual QA</button>
+      <button class="nav-tab" onclick="switchTab('device')">Device Menu</button>
+      <button class="nav-tab" onclick="switchTab('guide')">Setting Guide</button>
+      <button class="nav-tab" onclick="switchTab('vendors')">Vendors</button>
+      <button class="nav-tab" onclick="switchTab('learning')">Learning</button>
+      <button class="nav-tab" onclick="switchTab('access')">Device Access</button>
+    </div>
+
+    <!-- Tab: Workflows -->
+    <div class="tab-content active" id="tab-workflows">
+      <div class="section">
+        <h2>Workflows <button class="btn btn-primary" style="margin-left:auto" onclick="openGenerateModal()">+ New Workflow</button></h2>
+        <div class="workflow-list" id="workflowList"></div>
+      </div>
+
+      <div class="section">
+        <h2>Templates</h2>
+        <div class="template-grid" id="templateGrid"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Compliance -->
+    <div class="tab-content" id="tab-compliance">
+      <div class="section">
+        <h2>Compliance Tracking
+          <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="trackCompliance()">Track</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Excel File</label>
+            <div class="file-upload" onclick="document.getElementById('complianceExcel').click()">
+              <input type="file" id="complianceExcel" accept=".xlsx,.xls">
+              <div class="icon">📁</div>
+              <div class="text">Upload ITAC Excel</div>
+            </div>
+            <button class="btn btn-primary" style="margin-top:12px;width:100%" onclick="trackCompliance()">Track Compliance</button>
+          </div>
+          <div>
+            <label>Customer Name</label>
+            <input type="text" id="complianceCustomer" placeholder="Customer name">
+            <button class="btn btn-secondary" style="margin-top:12px;width:100%" onclick="getComplianceTrend()">Get Trend</button>
+          </div>
+        </div>
+        <div id="complianceResult" class="result-box" style="display:none"></div>
+      </div>
+
+      <div class="section">
+        <h2>Improvement Roadmap
+          <button class="btn btn-success btn-sm" style="margin-left:auto" onclick="generateRoadmap()">Generate</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Current Compliance %</label>
+            <input type="number" id="roadmapCurrent" placeholder="26" min="0" max="100">
+          </div>
+          <div>
+            <label>Target Compliance %</label>
+            <input type="number" id="roadmapTarget" placeholder="87" min="0" max="100">
+          </div>
+        </div>
+        <div id="roadmapResult" class="result-box" style="display:none"></div>
+      </div>
+
+      <div class="section">
+        <h2>Customer Proposal
+          <button class="btn btn-success btn-sm" style="margin-left:auto" onclick="generateProposal()">Generate</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Customer Name</label>
+            <input type="text" id="proposalCustomer" placeholder="Customer name">
+          </div>
+          <div>
+            <label>Target Compliance %</label>
+            <input type="number" id="proposalTarget" placeholder="87" min="0" max="100">
+          </div>
+        </div>
+        <div id="proposalResult" class="result-box" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Manual QA -->
+    <div class="tab-content" id="tab-manual">
+      <div class="section">
+        <h2>Manual QA Chat</h2>
+        <div class="chat-container">
+          <div class="chat-messages" id="chatMessages">
+            <div class="chat-message assistant"><div class="bubble">안녕하세요! Sangfor 제품 매뉴얼에 대해 질문해주세요.<br>예: "EPP에서 USB 차단 정책 어떻게 설정해?"</div></div>
+          </div>
+          <div class="chat-input">
+            <input type="text" id="chatInput" placeholder="Ask about Sangfor products..." onkeypress="if(event.key==='Enter')sendChat()">
+            <button class="btn btn-primary" onclick="sendChat()">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>Menu Path Finder</h2>
+        <div class="grid-2">
+          <div>
+            <label>Product</label>
+            <select id="menuPathProduct">
+              <option value="IAG">IAG</option>
+              <option value="ENDPOINT_SECURE">EPP</option>
+              <option value="CYBER_COMMAND">CC</option>
+            </select>
+          </div>
+          <div>
+            <label>Feature</label>
+            <input type="text" id="menuPathFeature" placeholder="e.g., USB blocking">
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="findMenuPath()">Find Path</button>
+        <div id="menuPathResult" class="result-box" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Device Menu -->
+    <div class="tab-content" id="tab-device">
+      <div class="section">
+        <h2>Capture Device Menu
+          <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="captureDeviceMenu()">Capture</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Product</label>
+            <select id="captureMenuProduct">
+              <option value="IAG">IAG</option>
+              <option value="ENDPOINT_SECURE">EPP</option>
+              <option value="CYBER_COMMAND">CC</option>
+            </select>
+          </div>
+          <div>
+            <label>CDP Port</label>
+            <input type="number" id="captureMenuPort" placeholder="9333" value="9333">
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="captureDeviceMenu()">Capture Menu</button>
+        <div id="captureMenuResult" class="result-box" style="display:none"></div>
+      </div>
+
+      <div class="section">
+        <h2>Compare Manual vs Device
+          <button class="btn btn-success btn-sm" style="margin-left:auto" onclick="compareManualVsDevice()">Compare</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Product</label>
+            <select id="compareProduct">
+              <option value="IAG">IAG</option>
+              <option value="ENDPOINT_SECURE">EPP</option>
+              <option value="CYBER_COMMAND">CC</option>
+            </select>
+          </div>
+          <div>
+            <label>CDP Port</label>
+            <input type="number" id="comparePort" placeholder="9333" value="9333">
+          </div>
+        </div>
+        <button class="btn btn-success" style="margin-top:12px" onclick="compareManualVsDevice()">Compare</button>
+        <div id="compareResult" class="result-box" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Setting Guide -->
+    <div class="tab-content" id="tab-guide">
+      <div class="section">
+        <h2>Setting Guide Generator
+          <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="generateSettingGuide()">Generate</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Customer Name</label>
+            <input type="text" id="guideCustomer" placeholder="Customer name">
+          </div>
+          <div>
+            <label>Product</label>
+            <select id="guideProduct">
+              <option value="IAG">IAG</option>
+              <option value="ENDPOINT_SECURE">EPP</option>
+              <option value="CYBER_COMMAND">CC</option>
+            </select>
+          </div>
+        </div>
+        <label>Requirements</label>
+        <textarea id="guideRequirements" placeholder="URL filtering, USB blocking, ..."></textarea>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="generateSettingGuide()">Generate Guide</button>
+        <div id="guideResult" class="result-box" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Vendors -->
+    <div class="tab-content" id="tab-vendors">
+      <div class="section">
+        <h2>Vendor Comparison
+          <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="compareVendors()">Compare</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Category</label>
+            <select id="vendorCategory">
+              <option value="endpoint">Endpoint Security</option>
+              <option value="ngfw">NGFW</option>
+              <option value="siem">SIEM</option>
+              <option value="ndr">NDR</option>
+              <option value="dlp">DLP</option>
+              <option value="firewall">Firewall</option>
+              <option value="ids">IDS/IPS</option>
+              <option value="waf">WAF</option>
+              <option value="ztna">ZTNA</option>
+              <option value="cloud">Cloud Security</option>
+              <option value="mobile">Mobile Security</option>
+            </select>
+          </div>
+          <div>
+            <label>Compare With Sangfor</label>
+            <input type="checkbox" id="vendorIncludeSangfor" checked>
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="compareVendors()">Compare Vendors</button>
+        <div id="vendorCompareResult" class="result-box" style="display:none"></div>
+      </div>
+
+      <div class="section">
+        <h2>Comparison Report
+          <button class="btn btn-success btn-sm" style="margin-left:auto" onclick="generateReport()">Generate</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Customer</label>
+            <input type="text" id="reportCustomer" placeholder="Customer name">
+          </div>
+          <div>
+            <label>Category</label>
+            <input type="text" id="reportCategory" placeholder="Endpoint Security">
+          </div>
+        </div>
+        <button class="btn btn-success" style="margin-top:12px" onclick="generateReport()">Generate Report</button>
+        <div id="reportResult" class="result-box" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Learning -->
+    <div class="tab-content" id="tab-learning">
+      <div class="section">
+        <h2>Self-Learning Pipeline</h2>
+        <div class="grid-3">
+          <div class="vendor-card">
+            <h4>Web Crawler</h4>
+            <p style="font-size:13px;color:#94a3b8">Collect vendor data from official sites</p>
+            <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="runLearning('crawl')">Run Crawler</button>
+          </div>
+          <div class="vendor-card">
+            <h4>RAG Indexer</h4>
+            <p style="font-size:13px;color:#94a3b8">Index documents for search</p>
+            <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="runLearning('index')">Run Indexer</button>
+          </div>
+          <div class="vendor-card">
+            <h4>Full Pipeline</h4>
+            <p style="font-size:13px;color:#94a3b8">Complete learning pipeline</p>
+            <button class="btn btn-success btn-sm" style="margin-top:8px" onclick="runLearning('full')">Run Full Pipeline</button>
+          </div>
+        </div>
+        <div id="learningResult" class="result-box" style="display:none"></div>
+      </div>
+
+      <div class="section">
+        <h2>Learning Schedules</h2>
+        <button class="btn btn-primary btn-sm" onclick="createSchedule()">+ New Schedule</button>
+        <div id="scheduleList" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Device Access -->
+    <div class="tab-content" id="tab-access">
+      <div class="section">
+        <h2>Access Request
+          <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="createAccessRequest()">Create Request</button>
+        </h2>
+        <div class="grid-2">
+          <div>
+            <label>Customer</label>
+            <input type="text" id="accessCustomer" placeholder="Customer name">
+          </div>
+          <div>
+            <label>Project</label>
+            <input type="text" id="accessProject" placeholder="Project name">
+          </div>
+        </div>
+        <label>Products (comma separated)</label>
+        <input type="text" id="accessProducts" placeholder="IAG, EPP, CC">
+        <button class="btn btn-primary" style="margin-top:12px" onclick="createAccessRequest()">Create Request</button>
+        <div id="accessRequestResult" class="result-box" style="display:none"></div>
+      </div>
+
+      <div class="section">
+        <h2>Submit Access Info</h2>
+        <div class="grid-2">
+          <div>
+            <label>Request ID</label>
+            <input type="text" id="accessRequestId" placeholder="Request ID">
+          </div>
+          <div>
+            <label>Product</label>
+            <select id="accessInfoProduct">
+              <option value="IAG">IAG</option>
+              <option value="ENDPOINT_SECURE">EPP</option>
+              <option value="CYBER_COMMAND">CC</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div>
+            <label>IP Address</label>
+            <input type="text" id="accessInfoIp" placeholder="10.80.1.106">
+          </div>
+          <div>
+            <label>Port</label>
+            <input type="number" id="accessInfoPort" placeholder="443" value="443">
+          </div>
+        </div>
+        <div class="grid-2">
+          <div>
+            <label>Username</label>
+            <input type="text" id="accessInfoUsername" placeholder="admin">
+          </div>
+          <div>
+            <label>Password</label>
+            <input type="password" id="accessInfoPassword" placeholder="password">
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="submitAccessInfo()">Submit Info</button>
+      </div>
+
+      <div class="section">
+        <h2>Pending Requests</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadAccessRequests()">Refresh</button>
+        <div id="accessRequestsList" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generate Modal -->
+  <div class="modal-overlay" id="generateModal">
+    <div class="modal">
+      <h3>Create New Workflow</h3>
+      <label>Customer Name *</label>
+      <input type="text" id="customerName" placeholder="Enter customer name" required>
+      <label>Environment</label>
+      <select id="environment">
+        <option value="customer">Customer</option>
+        <option value="lab">Lab</option>
+        <option value="poc">PoC</option>
+        <option value="production">Production</option>
+      </select>
+      <label>Target Products</label>
+      <div class="product-checkboxes">
+        <label><input type="checkbox" name="products" value="IAG"> IAG</label>
+        <label><input type="checkbox" name="products" value="ENDPOINT_SECURE"> EPP</label>
+        <label><input type="checkbox" name="products" value="CYBER_COMMAND"> CC</label>
+        <label><input type="checkbox" name="products" value="HCI_SCP"> HCI</label>
+      </div>
+      <label>Excel Checklist File</label>
+      <div class="file-upload" id="fileUpload" onclick="document.getElementById('excelFile').click()">
+        <input type="file" id="excelFile" accept=".xlsx,.xls" onchange="handleFileSelect(event)">
+        <div class="icon">📁</div>
+        <div class="text">Click to upload ITAC Excel checklist</div>
+        <div class="filename" id="fileName"></div>
+      </div>
+      <label>Customer Requirements</label>
+      <div class="requirement-list" id="requirementList">
+        <div class="requirement-item">
+          <input type="text" placeholder="Enter requirement">
+          <button class="btn btn-danger" onclick="removeRequirement(this)">✕</button>
+        </div>
+      </div>
+      <button class="btn btn-secondary" style="margin-top:8px" onclick="addRequirement()">+ Add Requirement</button>
+      <div class="actions">
+        <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="generateWorkflow()">Generate Workflow</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div class="modal-overlay" id="detailModal">
+    <div class="modal" style="width:700px">
+      <h3 id="detailTitle">Workflow Detail</h3>
+      <div id="detailContent"></div>
+      <div class="actions" id="detailActions">
+        <button class="btn btn-secondary" onclick="closeDetailModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = '';
+    let selectedFile = null;
+
+    // ─── Tab Navigation ──────────────────────────────────────────────────────
+
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      document.getElementById('tab-' + tabName).classList.add('active');
+      event.target.classList.add('active');
+    }
+
+    // ─── Dashboard ───────────────────────────────────────────────────────────
+
+    async function loadDashboard() {
+      try {
+        const [stats, workflows, templates] = await Promise.all([
+          fetch(API + '/api/dashboard/stats').then(r => r.json()),
+          fetch(API + '/api/workflows').then(r => r.json()),
+          fetch(API + '/api/templates').then(r => r.json()),
+        ]);
+
+        document.getElementById('totalWorkflows').textContent = stats.totalWorkflows;
+        document.getElementById('completedWorkflows').textContent = stats.completedWorkflows;
+        document.getElementById('runningWorkflows').textContent = stats.runningWorkflows;
+        document.getElementById('totalSteps').textContent = stats.totalStepsExecuted;
+        document.getElementById('uptime').textContent = 'Uptime: ' + stats.uptime;
+
+        const list = document.getElementById('workflowList');
+        list.innerHTML = workflows.map(w => `
+          <div class="workflow-item" onclick="showDetail('${w.id}')">
+            <div class="info">
+              <div class="name">${w.name}</div>
+              <div class="meta">${w.stepsCount || '-'} steps | Progress: ${w.progress}%</div>
+            </div>
+            <span class="status ${w.status}">${w.status}</span>
+          </div>
+        `).join('') || '<div style="color:#64748b; text-align:center; padding:20px;">No workflows yet. Create one!</div>';
+
+        const grid = document.getElementById('templateGrid');
+        grid.innerHTML = templates.map(t => `
+          <div class="template-card" onclick="createFromTemplate('${t.id}')">
+            <div class="name">${t.name}</div>
+            <div class="desc">${t.description}</div>
+            <div class="tags">${t.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}</div>
+          </div>
+        `).join('');
+      } catch (error) {
+        console.error('Dashboard load error:', error);
+      }
+    }
+
+    // ─── Workflow Detail ─────────────────────────────────────────────────────
+
+    async function showDetail(id) {
+      const data = await fetch(API + '/api/workflows/' + id).then(r => r.json());
+      document.getElementById('detailTitle').textContent = data.workflow.name;
+
+      let html = '<div style="margin-bottom:12px"><strong>Status:</strong> <span class="status ' + data.workflow.status + '">' + data.workflow.status + '</span></div>';
+      html += '<div style="margin-bottom:12px"><strong>Customer:</strong> ' + data.workflow.customerProfile.customerName + '</div>';
+      html += '<div style="margin-bottom:12px"><strong>Products:</strong> ' + data.workflow.customerProfile.products.join(', ') + '</div>';
+
+      if (data.workflow.customerProfile.requirements.length > 0) {
+        html += '<div style="margin-bottom:12px"><strong>Requirements:</strong><ul style="margin-top:4px;padding-left:20px">';
+        data.workflow.customerProfile.requirements.forEach(r => {
+          html += '<li style="font-size:13px;color:#94a3b8;margin-top:2px">' + r.text + '</li>';
+        });
+        html += '</ul></div>';
+      }
+
+      html += '<div style="margin-bottom:12px"><strong>Steps:</strong></div>';
+      html += '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px">';
+      data.workflow.steps.forEach(s => {
+        const icon = s.status === 'completed' ? '✅' : s.status === 'failed' ? '❌' : s.status === 'running' ? '⏳' : '⏸️';
+        html += '<div style="font-size:13px;display:flex;gap:8px;align-items:center"><span>' + icon + '</span><span>' + s.name + '</span></div>';
+      });
+      html += '</div>';
+
+      document.getElementById('detailContent').innerHTML = html;
+
+      let actions = '<button class="btn btn-secondary" onclick="closeDetailModal()">Close</button>';
+      if (data.workflow.status === 'draft') {
+        actions = '<button class="btn btn-success" onclick="approveWorkflow(\'' + id + '\')">Approve</button><button class="btn btn-danger" onclick="rejectWorkflow(\'' + id + '\')">Reject</button>' + actions;
+      } else if (data.workflow.status === 'approved') {
+        actions = '<button class="btn btn-primary" onclick="executeWorkflow(\'' + id + '\')">Execute</button>' + actions;
+      }
+      document.getElementById('detailActions').innerHTML = actions;
+
+      document.getElementById('detailModal').classList.add('active');
+    }
+
+    function openGenerateModal() { document.getElementById('generateModal').classList.add('active'); }
+    function closeModal() {
+      document.getElementById('generateModal').classList.remove('active');
+      document.getElementById('customerName').value = '';
+      document.getElementById('environment').value = 'customer';
+      document.querySelectorAll('input[name="products"]').forEach(cb => cb.checked = false);
+      document.getElementById('fileName').textContent = '';
+      selectedFile = null;
+      document.getElementById('requirementList').innerHTML = `
+        <div class="requirement-item">
+          <input type="text" placeholder="Enter requirement">
+          <button class="btn btn-danger" onclick="removeRequirement(this)">✕</button>
+        </div>
+      `;
+    }
+    function closeDetailModal() { document.getElementById('detailModal').classList.remove('active'); }
+
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (file) {
+        selectedFile = file;
+        document.getElementById('fileName').textContent = file.name;
+        document.getElementById('fileUpload').classList.add('active');
+      }
+    }
+
+    function addRequirement() {
+      const list = document.getElementById('requirementList');
+      const item = document.createElement('div');
+      item.className = 'requirement-item';
+      item.innerHTML = `
+        <input type="text" placeholder="Enter requirement">
+        <button class="btn btn-danger" onclick="removeRequirement(this)">✕</button>
+      `;
+      list.appendChild(item);
+    }
+
+    function removeRequirement(btn) {
+      const list = document.getElementById('requirementList');
+      if (list.children.length > 1) btn.parentElement.remove();
+    }
+
+    function getRequirements() {
+      return Array.from(document.querySelectorAll('#requirementList input')).map(i => i.value.trim()).filter(Boolean);
+    }
+
+    function getSelectedProducts() {
+      return Array.from(document.querySelectorAll('input[name="products"]:checked')).map(cb => cb.value);
+    }
+
+    async function generateWorkflow() {
+      const name = document.getElementById('customerName').value.trim();
+      if (!name) { alert('Customer name is required'); return; }
+
+      const body = {
+        customerName: name,
+        excelFilePath: selectedFile ? selectedFile.name : '',
+        requirements: getRequirements(),
+        environment: document.getElementById('environment').value,
+        products: getSelectedProducts().length > 0 ? getSelectedProducts() : undefined
+      };
+
+      const result = await fetch(API + '/api/workflows/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(r => r.json());
+
+      closeModal();
+      alert('Workflow created: ' + result.name + ' (' + result.steps + ' steps)');
+      loadDashboard();
+    }
+
+    async function createFromTemplate(templateId) {
+      const name = prompt('Customer name:');
+      if (!name) return;
+      await fetch(API + '/api/workflows/from-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId, customerName: name, products: [] })
+      });
+      loadDashboard();
+    }
+
+    async function approveWorkflow(id) {
+      await fetch(API + '/api/workflows/' + id + '/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approvedBy: 'admin' })
+      });
+      closeDetailModal();
+      loadDashboard();
+    }
+
+    async function rejectWorkflow(id) {
+      const reason = prompt('Rejection reason:');
+      if (!reason) return;
+      await fetch(API + '/api/workflows/' + id + '/reject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason })
+      });
+      closeDetailModal();
+      loadDashboard();
+    }
+
+    async function executeWorkflow(id) {
+      if (!confirm('Execute this workflow?')) return;
+      const result = await fetch(API + '/api/workflows/' + id + '/execute', { method: 'POST' }).then(r => r.json());
+      closeDetailModal();
+      alert('Execution completed: ' + result.stepsSucceeded + '/' + result.stepsExecuted + ' steps succeeded');
+      loadDashboard();
+    }
+
+    // ─── Compliance ──────────────────────────────────────────────────────────
+
+    async function trackCompliance() {
+      const fileInput = document.getElementById('complianceExcel');
+      const customer = document.getElementById('complianceCustomer').value;
+      if (!fileInput.files[0]) { alert('Please upload Excel file'); return; }
+
+      const formData = new FormData();
+      formData.append('excel', fileInput.files[0]);
+      formData.append('customer', customer);
+
+      const result = await fetch(API + '/api/compliance/track', {
+        method: 'POST',
+        body: formData
+      }).then(r => r.json());
+
+      showResult('complianceResult', `Compliance: ${result.complianceRate}%\nTotal Items: ${result.totalItems}\nMissing Items: ${result.missingItems.length}`);
+    }
+
+    async function getComplianceTrend() {
+      const customer = document.getElementById('complianceCustomer').value;
+      if (!customer) { alert('Enter customer name'); return; }
+
+      const result = await fetch(API + '/api/compliance/trend?customer=' + encodeURIComponent(customer)).then(r => r.json());
+      showResult('complianceResult', `Trend: ${result.trend}\nRecords: ${result.records?.length || 0}`);
+    }
+
+    async function generateRoadmap() {
+      const current = parseInt(document.getElementById('roadmapCurrent').value) || 26;
+      const target = parseInt(document.getElementById('roadmapTarget').value) || 87;
+
+      const result = await fetch(API + '/api/compliance/roadmap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentCompliance: current, targetCompliance: target })
+      }).then(r => r.json());
+
+      showResult('roadmapResult', `Phases: ${result.phases?.length || 0}\nEstimated Compliance: ${result.estimatedCompliance}%`);
+    }
+
+    async function generateProposal() {
+      const customer = document.getElementById('proposalCustomer').value;
+      const target = parseInt(document.getElementById('proposalTarget').value) || 87;
+      if (!customer) { alert('Enter customer name'); return; }
+
+      const result = await fetch(API + '/api/compliance/proposal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerName: customer, targetCompliance: target })
+      }).then(r => r.json());
+
+      showResult('proposalResult', `Proposal: ${result.title}\nTotal Cost: $${result.totalCost}`);
+    }
+
+    // ─── Manual QA ───────────────────────────────────────────────────────────
+
+    async function sendChat() {
+      const input = document.getElementById('chatInput');
+      const question = input.value.trim();
+      if (!question) return;
+
+      const messages = document.getElementById('chatMessages');
+      messages.innerHTML += `<div class="chat-message user"><div class="bubble">${escapeHtml(question)}</div></div>`;
+      input.value = '';
+
+      const result = await fetch(API + '/api/manual/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      }).then(r => r.json());
+
+      messages.innerHTML += `<div class="chat-message assistant"><div class="bubble">${escapeHtml(result.answer || 'No answer found.')}</div></div>`;
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    async function findMenuPath() {
+      const product = document.getElementById('menuPathProduct').value;
+      const feature = document.getElementById('menuPathFeature').value;
+      if (!feature) { alert('Enter feature name'); return; }
+
+      const result = await fetch(API + '/api/manual/menu-path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product, feature })
+      }).then(r => r.json());
+
+      showResult('menuPathResult', `Path: ${result.path}\nVersion: ${result.version}`);
+    }
+
+    // ─── Device Menu ─────────────────────────────────────────────────────────
+
+    async function captureDeviceMenu() {
+      const product = document.getElementById('captureMenuProduct').value;
+      const port = document.getElementById('captureMenuPort').value;
+
+      const result = await fetch(API + '/api/device/capture-menu', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product, cdpPort: parseInt(port) })
+      }).then(r => r.json());
+
+      showResult('captureMenuResult', `Menu Items: ${result.menuItems?.length || 0}\nCaptured At: ${result.capturedAt}`);
+    }
+
+    async function compareManualVsDevice() {
+      const product = document.getElementById('compareProduct').value;
+      const port = document.getElementById('comparePort').value;
+
+      const result = await fetch(API + '/api/device/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product, cdpPort: parseInt(port) })
+      }).then(r => r.json());
+
+      let text = `Matched: ${result.matchedItems?.length || 0}\nMissing in Device: ${result.missingInDevice?.length || 0}\nExtra in Device: ${result.extraInDevice?.length || 0}`;
+      showResult('compareResult', text);
+    }
+
+    // ─── Setting Guide ───────────────────────────────────────────────────────
+
+    async function generateSettingGuide() {
+      const customer = document.getElementById('guideCustomer').value;
+      const product = document.getElementById('guideProduct').value;
+      const requirements = document.getElementById('guideRequirements').value;
+      if (!customer || !requirements) { alert('Enter customer and requirements'); return; }
+
+      const result = await fetch(API + '/api/guide/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerName: customer, product, requirements: requirements.split(',').map(r => r.trim()) })
+      }).then(r => r.json());
+
+      showResult('guideResult', result.guide || JSON.stringify(result, null, 2));
+    }
+
+    // ─── Vendors ─────────────────────────────────────────────────────────────
+
+    async function compareVendors() {
+      const category = document.getElementById('vendorCategory').value;
+      const includeSangfor = document.getElementById('vendorIncludeSangfor').checked;
+
+      const result = await fetch(API + '/api/vendors/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, includeSangfor })
+      }).then(r => r.json());
+
+      let text = `Vendors: ${result.vendors?.length || 0}\nTop Vendor: ${result.topVendor || 'N/A'}`;
+      if (result.vendors) {
+        result.vendors.forEach(v => {
+          text += `\n\n• ${v.name} (Score: ${v.score})\n  Features: ${v.features?.join(', ') || 'N/A'}`;
+        });
+      }
+      showResult('vendorCompareResult', text);
+    }
+
+    async function generateReport() {
+      const customer = document.getElementById('reportCustomer').value;
+      const category = document.getElementById('reportCategory').value;
+      if (!customer || !category) { alert('Enter customer and category'); return; }
+
+      const result = await fetch(API + '/api/vendors/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerName: customer, category })
+      }).then(r => r.json());
+
+      showResult('reportResult', result.report || JSON.stringify(result, null, 2));
+    }
+
+    // ─── Learning ────────────────────────────────────────────────────────────
+
+    async function runLearning(type) {
+      const result = await fetch(API + '/api/learning/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type })
+      }).then(r => r.json());
+
+      showResult('learningResult', `Status: ${result.status}\nVendors: ${result.vendorsProcessed || 0}\nChunks: ${result.chunksIndexed || 0}`);
+    }
+
+    async function createSchedule() {
+      const name = prompt('Schedule name:');
+      if (!name) return;
+      const frequency = prompt('Frequency (daily/weekly/monthly):', 'weekly');
+      if (!frequency) return;
+
+      await fetch(API + '/api/learning/schedules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, frequency, vendors: ['CrowdStrike', 'Microsoft', 'SentinelOne'], enabled: true })
+      });
+      loadSchedules();
+    }
+
+    async function loadSchedules() {
+      const result = await fetch(API + '/api/learning/schedules').then(r => r.json());
+      const list = document.getElementById('scheduleList');
+      list.innerHTML = result.map(s => `
+        <div class="workflow-item">
+          <div class="info">
+            <div class="name">${s.name}</div>
+            <div class="meta">${s.frequency} | Vendors: ${s.vendors?.length || 0}</div>
+          </div>
+          <span class="status ${s.enabled ? 'completed' : 'rejected'}">${s.enabled ? 'Enabled' : 'Disabled'}</span>
+        </div>
+      `).join('') || '<div style="color:#64748b; text-align:center; padding:20px;">No schedules</div>';
+    }
+
+    // ─── Device Access ───────────────────────────────────────────────────────
+
+    async function createAccessRequest() {
+      const customer = document.getElementById('accessCustomer').value;
+      const project = document.getElementById('accessProject').value;
+      const products = document.getElementById('accessProducts').value;
+      if (!customer || !project) { alert('Enter customer and project'); return; }
+
+      const result = await fetch(API + '/api/access/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerName: customer, projectName: project, products: products.split(',').map(p => p.trim()) })
+      }).then(r => r.json());
+
+      showResult('accessRequestResult', `Request ID: ${result.requestId}\nStatus: ${result.status}`);
+    }
+
+    async function submitAccessInfo() {
+      const requestId = document.getElementById('accessRequestId').value;
+      const product = document.getElementById('accessInfoProduct').value;
+      const ip = document.getElementById('accessInfoIp').value;
+      const port = document.getElementById('accessInfoPort').value;
+      const username = document.getElementById('accessInfoUsername').value;
+      const password = document.getElementById('accessInfoPassword').value;
+      if (!requestId || !ip || !username || !password) { alert('Fill all fields'); return; }
+
+      await fetch(API + '/api/access/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId, product, ip, port: parseInt(port), username, password })
+      });
+      alert('Access info submitted');
+    }
+
+    async function loadAccessRequests() {
+      const result = await fetch(API + '/api/access/requests').then(r => r.json());
+      const list = document.getElementById('accessRequestsList');
+      list.innerHTML = result.map(r => `
+        <div class="workflow-item">
+          <div class="info">
+            <div class="name">${r.customerName} - ${r.projectName}</div>
+            <div class="meta">Products: ${r.products?.join(', ') || 'N/A'} | Status: ${r.status}</div>
+          </div>
+          <span class="status ${r.status === 'approved' ? 'completed' : 'draft'}">${r.status}</span>
+        </div>
+      `).join('') || '<div style="color:#64748b; text-align:center; padding:20px;">No requests</div>';
+    }
+
+    // ─── Utilities ───────────────────────────────────────────────────────────
+
+    function showResult(elementId, text) {
+      const el = document.getElementById(elementId);
+      el.style.display = 'block';
+      el.innerHTML = '<pre>' + escapeHtml(text) + '</pre>';
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ─── Init ────────────────────────────────────────────────────────────────
+
+    loadDashboard();
+    loadSchedules();
+    loadAccessRequests();
+    setInterval(loadDashboard, 5000);
+  </script>
+</body>
+</html>

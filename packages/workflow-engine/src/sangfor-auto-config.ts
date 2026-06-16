@@ -9,7 +9,7 @@
  * 5. 단계별 스크린샷 + 검증
  */
 
-import { chromium, type Page, type Browser } from 'playwright';
+import { chromium, type Page, type Browser, type ElementHandle } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { nowId, nowISO, createLogger } from '@sangfor/workflow-shared';
@@ -286,12 +286,18 @@ const AUDIT_TO_SCENARIO: Record<string, string> = {
 
 export class SangforAutoConfig {
   private browser: Browser | null = null;
+  private currentPage: Page | null = null;       // [FIX #3] CDP 연결 재사용
   private cdpPort: number;
   private outputDir: string;
+  private configToId: Map<SangforConfig, string>; // [FIX #9] 역방향 맵
 
   constructor(options?: { cdpPort?: number; outputDir?: string }) {
     this.cdpPort = options?.cdpPort ?? 9333;
     this.outputDir = options?.outputDir ?? './outputs/auto-config';
+    // [FIX #9] 역방향 맵 사전 구축
+    this.configToId = new Map(
+      Object.entries(CONFIG_SCENARIOS).map(([id, cfg]) => [cfg, id]),
+    );
   }
 
   // ── 시나리오 조회 ──
@@ -354,8 +360,8 @@ export class SangforAutoConfig {
       log.info('Chrome CDP 연결 성공');
 
       // 2) 로그인 (이미 로그인된 경우 스킵)
-      const isLoggedIn = !(page.url().includes('login') || page.url() === credentials.targetUrl + '/');
-      if (!isLoggedIn) {
+      const hasLoginForm = await page.locator('input[type="password"]').count() > 0;  // [FIX #5]
+      if (hasLoginForm) {
         await this.login(page, credentials);
         log.info('로그인 성공');
       } else {
@@ -390,8 +396,8 @@ export class SangforAutoConfig {
         }
       }
 
-      // 5) 저장 버튼 클릭 (설정 액션이 있을 때만)
-      if (config.settings.length > 0) {
+      // 5) 저장 버튼 클릭 (성공한 설정이 있을 때만) [FIX #6]
+      if (Object.keys(appliedSettings).length > 0) {
         await this.clickSaveButton(page);
         await page.waitForTimeout(3000);
         screenshots.push(await this.captureScreenshot(page, 'after_save'));
@@ -411,6 +417,8 @@ export class SangforAutoConfig {
       errors.push(`치명적 오류: ${String(err)}`);
       log.error(`설정 적용 실패: ${err}`);
     }
+    // [REDTEAM] finally 블록 제거 — 연결 재사용 패턴이므로 close하지 않음
+    // applyFromAuditItems/applyMultipleConfigs에서 close() 호출
 
     const duration = Date.now() - startTime;
     log.info(`설정 적용 완료: ${config.feature} (${duration}ms, ${errors.length}개 오류)`);
@@ -468,27 +476,30 @@ export class SangforAutoConfig {
   ): Promise<Array<{ item: string; result: ConfigResult }>> {
     const results: Array<{ item: string; result: ConfigResult }> = [];
 
-    for (const item of auditItems) {
-      const config = this.findByAuditItem(item);
-      if (config) {
-        const scenarioId = Object.keys(CONFIG_SCENARIOS).find(
-          k => CONFIG_SCENARIOS[k] === config,
-        );
-        if (scenarioId) {
-          const result = await this.applyConfig(scenarioId, credentials);
-          results.push({ item, result });
+    try {
+      for (const item of auditItems) {
+        const config = this.findByAuditItem(item);
+        if (config) {
+          const scenarioId = this.configToId.get(config);  // [FIX #9] 역방향 맵 사용
+          if (scenarioId) {
+            const result = await this.applyConfig(scenarioId, credentials);
+            results.push({ item, result });
+          } else {
+            results.push({
+              item,
+              result: { success: false, appliedSettings: {}, screenshots: [], errors: [`시나리오 ID 매핑 실패`], warnings: [], duration: 0 },
+            });
+          }
         } else {
           results.push({
             item,
-            result: { success: false, appliedSettings: {}, screenshots: [], errors: [`시나리오 ID 매핑 실패`], warnings: [], duration: 0 },
+            result: { success: false, appliedSettings: {}, screenshots: [], errors: [`매핑 없음: ${item}`], warnings: [], duration: 0 },
           });
         }
-      } else {
-        results.push({
-          item,
-          result: { success: false, appliedSettings: {}, screenshots: [], errors: [`매핑 없음: ${item}`], warnings: [], duration: 0 },
-        });
       }
+    } finally {
+      // [FIX #3] 루프 종료 후 CDP 연결 정리
+      await this.close();
     }
 
     return results;
@@ -501,15 +512,38 @@ export class SangforAutoConfig {
     credentials: DeviceCredentials,
   ): Promise<ConfigResult[]> {
     const results: ConfigResult[] = [];
-    for (const id of scenarioIds) {
-      results.push(await this.applyConfig(id, credentials));
+    try {
+      for (const id of scenarioIds) {
+        results.push(await this.applyConfig(id, credentials));
+      }
+    } finally {
+      // [FIX #3] 루프 종료 후 CDP 연결 정리
+      await this.close();
     }
     return results;
   }
 
+  // ── CDP 연결 해제 [FIX #3] ──
+
+  async close(): Promise<void> {
+    if (this.browser?.isConnected()) {
+      await this.browser.close().catch(() => {});
+    }
+    this.browser = null;
+    this.currentPage = null;
+  }
+
   // ─── 내부 헬퍼 ────────────────────────────────────────────────────────────
 
+  /**
+   * [FIX #3] CDP 연결 재사용 — 기존 연결이 유효하면 재사용, 없으면 새로 연결
+   */
   private async connectToDevice(targetUrl: string): Promise<Page> {
+    // 기존 연결 재사용
+    if (this.browser?.isConnected() && this.currentPage && !this.currentPage.isClosed()) {
+      return this.currentPage;
+    }
+
     const cdpEndpoint = `http://127.0.0.1:${this.cdpPort}`;
 
     try {
@@ -520,10 +554,11 @@ export class SangforAutoConfig {
       // 타겟 URL과 매칭되는 기존 탭 찾기
       const host = targetUrl.split('://')[1]?.split('/')[0] ?? '';
       const existingPage = context.pages().find(p => p.url().includes(host));
-      if (existingPage) return existingPage;
-
-      return context.pages()[0] ?? await context.newPage();
+      this.currentPage = existingPage ?? context.pages()[0] ?? await context.newPage();
+      return this.currentPage;
     } catch {
+      this.browser = null;
+      this.currentPage = null;
       throw new Error(
         `Chrome CDP 연결 실패: ${cdpEndpoint}\n` +
         `Chrome이 --remote-debugging-port=${this.cdpPort}로 실행 중인지 확인하세요.`,
@@ -535,12 +570,17 @@ export class SangforAutoConfig {
     await page.goto(credentials.targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForTimeout(3000);
 
-    // CAPTCHA 감지
-    const captchaImg = page.locator('img[src*="randcode"], img[src*="captcha"], img[src*="verify"]');
-    if (await captchaImg.isVisible({ timeout: 2000 }).catch(() => false)) {
+    // [FIX #4] CAPTCHA 감지 — waitFor로 대기 의도 살리기
+    const captchaLocator = page.locator('img[src*="randcode"], img[src*="captcha"], img[src*="verify"]');
+    await captchaLocator.waitFor({ state: 'visible', timeout: 2000 }).catch((err) => {
+      // [REDTEAM] TimeoutError만 무시, 다른 에러는 전파
+      if (String(err).includes('Timeout') || String(err).includes('timeout')) return;
+      throw err;
+    });
+    if (await captchaLocator.count() > 0 && await captchaLocator.isVisible()) {
       const captchaPath = join(this.outputDir, 'captcha.png');
       mkdirSync(this.outputDir, { recursive: true });
-      await captchaImg.screenshot({ path: captchaPath });
+      await captchaLocator.first().screenshot({ path: captchaPath });
       throw new Error(`CAPTCHA 감지됨. 스크린샷: ${captchaPath} — 수동 입력 후 재시도하세요.`);
     }
 
@@ -560,20 +600,43 @@ export class SangforAutoConfig {
     await loginBtn.click();
     await page.waitForTimeout(5000);
 
-    if (page.url().includes('login') || page.url().includes('Login')) {
+    // [FIX #5] 로그인 감지 — password + login button 조합
+    const stillHasPassword = await page.locator('input[type="password"]').count() > 0;
+    const stillHasLoginBtn = await page.locator(
+      'button:has-text("Log In"), button:has-text("로그인"), input[id="button"]',
+    ).count() > 0;
+    if (stillHasPassword && stillHasLoginBtn) {
       throw new Error('로그인 실패 — 자격 증명을 확인하세요.');
     }
   }
 
   private async navigateToHash(page: Page, hashRoute: string): Promise<void> {
-    const baseUrl = new URL(page.url()).origin;
-    await page.goto(`${baseUrl}/${hashRoute}`, {
+    const currentUrl = page.url();
+    const cleanHash = hashRoute.startsWith('#') ? hashRoute.slice(1) : hashRoute;
+    let baseUrl: string;
+
+    try {
+      // [FIX #7] about:blank는 예외를 던지지 않음 — origin이 "null" 문자열 반환
+      const origin = new URL(currentUrl).origin;
+      if (!currentUrl || currentUrl === 'about:blank' || origin === 'null') {
+        // [REDTEAM] about:blank/data: 등 비정상 URL → 직접 goto 시도
+        log.warn(`비정상 URL 상태: ${currentUrl}, 직접 이동 시도`);
+        await page.goto(`/#${cleanHash}`, { waitUntil: 'networkidle', timeout: 30_000 }).catch(() => {});
+        return;
+      }
+      baseUrl = origin;
+    } catch {
+      log.warn(`URL 파싱 실패: ${currentUrl}, 직접 이동 시도`);
+      await page.goto(`/#${cleanHash}`, { waitUntil: 'networkidle', timeout: 30_000 }).catch(() => {});
+      return;
+    }
+
+    await page.goto(`${baseUrl}/#${cleanHash}`, {
       waitUntil: 'networkidle',
       timeout: 30_000,
     }).catch(async () => {
-      // goto 실패 시 해시 직접 변경
-      await page.evaluate((hash: string) => { window.location.hash = hash; }, hashRoute);
-      await page.waitForLoadState('networkidle');
+      await page.evaluate((hash: string) => { window.location.hash = hash; }, cleanHash);
+      await page.waitForLoadState('networkidle').catch(() => {});
     });
   }
 
@@ -643,33 +706,105 @@ export class SangforAutoConfig {
     if (!found) log.warn(`체크박스 미발견: ${action.label}`);
   }
 
+  /**
+   * [FIX #2] actionSelect — label 파라미터 사용 + selector 우선 + ExtJS 폴백
+   */
   private async actionSelect(page: Page, action: SettingAction): Promise<void> {
-    await page.evaluate((opts: { label: string; value: string }) => {
-      const selects = Array.from(document.querySelectorAll('select'));
-      for (const sel of selects) {
-        const opt = Array.from(sel.options).find(o => (o.textContent ?? '').includes(opts.value));
-        if (opt) {
-          sel.value = opt.value;
-          sel.dispatchEvent(new Event('change', { bubbles: true }));
-          return;
-        }
+    // 1) selector가 있으면 Playwright locator로 시도
+    if (action.selector) {
+      const loc = page.locator(action.selector);
+      if (await loc.count() > 0) {
+        await loc.selectOption({ label: action.value as string }).catch(async () => {
+          await loc.selectOption({ value: action.value as string });
+        });
+        return;
       }
+    }
+
+    // 2) label 기반 native <select> 탐색
+    const found = await page.evaluate((opts: { label: string; value: string }) => {
+      let targetSelect: HTMLSelectElement | null = null;
+
+      // label 기반: 해당 select 찾기
+      const labels = Array.from(document.querySelectorAll('label, span, td, div'));
+      const labelEl = labels.find(l => (l.textContent?.trim() ?? '').includes(opts.label));
+      if (labelEl) {
+        targetSelect = labelEl.parentElement?.querySelector('select') as HTMLSelectElement | null
+          ?? labelEl.closest('tr')?.querySelector('select') as HTMLSelectElement | null
+          ?? labelEl.closest('form')?.querySelector('select') as HTMLSelectElement | null;
+      }
+
+      // 전체 select 순회 (label 매칭 실패 시 폴백)
+      if (!targetSelect) {
+        const selects = Array.from(document.querySelectorAll('select'));
+        targetSelect = selects[0];
+      }
+
+      if (!targetSelect) return false;
+
+      const opt = Array.from(targetSelect.options).find(o =>
+        (o.textContent ?? '').includes(opts.value) || o.value === opts.value,
+      );
+      if (opt) {
+        targetSelect.value = opt.value;
+        targetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      }
+      return false;
     }, { label: action.label, value: action.value as string });
+
+    if (!found) {
+      // 3) ExtJS 커스텀 드롭다운 폴백
+      const extJsFound = await page.evaluate((label: string) => {
+        const comboLists = Array.from(document.querySelectorAll('.x-combo-list, .x-boundlist, [role="listbox"]'));
+        for (const list of comboLists) {
+          const items = Array.from(list.querySelectorAll('.x-combo-list-item, .x-boundlist-item, [role="option"]'));
+          for (const item of items) {
+            if ((item.textContent ?? '').includes(label)) {
+              (item as HTMLElement).click();
+              return true;
+            }
+          }
+        }
+        return false;
+      }, action.value as string);
+
+      if (!extJsFound) log.warn(`셀렉트 미발견 또는 옵션 없음: ${action.label} = ${action.value}`);
+    }
   }
 
+  /**
+   * [FIX #8] React SPA 대응 — Playwright fill() 사용 + ElementHandle 직접 사용
+   */
   private async actionInput(page: Page, action: SettingAction): Promise<void> {
-    await page.evaluate((opts: { label: string; value: string }) => {
-      const labels = Array.from(document.querySelectorAll('label, span'));
-      const label = labels.find(l => (l.textContent?.trim() ?? '').includes(opts.label));
-      if (label) {
-        const input = label.parentElement?.querySelector('input, textarea') as HTMLInputElement | null;
-        if (input) {
-          input.value = opts.value;
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.dispatchEvent(new Event('change', { bubbles: true }));
-        }
+    // 1) selector가 있으면 Playwright locator fill 사용
+    if (action.selector) {
+      const locator = page.locator(action.selector);
+      if (await locator.count() > 0) {
+        await locator.fill(action.value as string);
+        return;
       }
-    }, { label: action.label, value: action.value as string });
+    }
+
+    // 2) 라벨 기반: ElementHandle으로 input 찾기 → fill
+    const inputHandle = await page.evaluateHandle((label: string) => {
+      const labels = Array.from(document.querySelectorAll('label, span, td, div'));
+      const labelEl = labels.find(l => (l.textContent?.trim() ?? '').includes(label));
+      if (labelEl) {
+        const forAttr = labelEl.getAttribute('for');
+        if (forAttr) return document.getElementById(forAttr);
+        return labelEl.parentElement?.querySelector('input, textarea');
+      }
+      return null;
+    }, action.label);
+
+    const element = inputHandle.asElement();
+    if (element) {
+      await (element as ElementHandle<HTMLInputElement>).fill(action.value as string);
+      await element.dispose();
+    } else {
+      log.warn(`입력 필드 미발견: ${action.label}`);
+    }
   }
 
   private async actionToggle(page: Page, action: SettingAction): Promise<void> {
@@ -709,11 +844,14 @@ export class SangforAutoConfig {
     }
   }
 
+  /**
+   * [FIX #10] path 변수명 충돌 해결 — filePath 사용
+   */
   private async captureScreenshot(page: Page, name: string): Promise<string> {
     mkdirSync(this.outputDir, { recursive: true });
-    const path = join(this.outputDir, `${name}_${Date.now()}.png`);
-    await page.screenshot({ path, fullPage: false });
-    return path;
+    const filePath = join(this.outputDir, `${name}_${Date.now()}.png`);
+    await page.screenshot({ path: filePath, fullPage: false });
+    return filePath;
   }
 
   private checkCriterion(pageText: string, criterion: string): boolean {

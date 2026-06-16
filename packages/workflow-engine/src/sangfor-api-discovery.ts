@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, type Browser, type Page, type BrowserContext } from 'playwright';
 import { createLogger, nowId, nowISO } from '@sangfor/workflow-shared';
-import type { Scenario, ScenarioAPIEndpoint } from './scenario-db';
+import type { Scenario, ScenarioAPIEndpoint } from './scenario-db.js';
 
 const log = createLogger('api-discovery');
 
@@ -84,6 +84,7 @@ export interface HARCaptureConfig {
   targetUrl: string;
   outputDir: string;
   captureDurationMs?: number;
+  headless?: boolean;
 }
 
 // ─── API Discovery ──────────────────────────────────────────────────────────
@@ -92,20 +93,38 @@ export class SangforAPIDiscovery {
   private llmEndpoint: string;
   private llmApiKey: string;
   private llmModel: string;
+  private headless: boolean;
+  private autoMode: boolean;
+  private maxPromptEntries: number;
+
+  /** Sangfor 콘솔에서 흔히 사용하는 API 경로 패턴 */
+  private static readonly API_PATH_PATTERNS = [
+    '/api', '/cgi-bin', '/management', '/rest', '/auth', '/v1', '/v2', '/webapi',
+  ];
 
   constructor(options?: {
     llmEndpoint?: string;
     llmApiKey?: string;
     llmModel?: string;
+    headless?: boolean;
+    autoMode?: boolean;
+    maxPromptEntries?: number;
   }) {
     this.llmEndpoint = options?.llmEndpoint ?? 'http://localhost:1234/v1/chat/completions';
     this.llmApiKey = options?.llmApiKey ?? process.env.OPENAI_API_KEY ?? 'lm-studio';
     this.llmModel = options?.llmModel ?? 'local-model';
+    this.headless = options?.headless ?? true;
+    this.autoMode = options?.autoMode ?? false;
+    this.maxPromptEntries = options?.maxPromptEntries ?? 80;
   }
 
   // ── 1단계: HAR 캡처 ──
 
   async captureHAR(config: HARCaptureConfig): Promise<string> {
+    // [FIX #3] targetUrl 유효성 검사
+    try { new URL(config.targetUrl); }
+    catch { throw new Error(`잘못된 URL: ${config.targetUrl}`); }
+
     const outputDir = config.outputDir;
     mkdirSync(outputDir, { recursive: true });
 
@@ -114,37 +133,70 @@ export class SangforAPIDiscovery {
 
     log.info(`HAR 캡처 시작: ${config.product} → ${config.targetUrl}`);
 
-    const browser = await chromium.launch({ headless: false });
+    // [FIX #1] headless 옵션화 (기본 true, config에서 오버라이드 가능)
+    const browser = await chromium.launch({ headless: config.headless ?? this.headless });
     const context = await browser.newContext({
       ignoreHTTPSErrors: true,
       recordHar: {
         path: harPath,
-        content: 'include',
-        mode: 'full',
+        content: 'embed',   // [FIX #2] 'include' → 'embed' (Playwright 유효값)
+        mode: 'full',       // 유효한 옵션 유지
       },
     });
     const page = await context.newPage();
 
-    await page.goto(config.targetUrl, { waitUntil: 'domcontentloaded' });
+    // [FIX #10] SIGINT/SIGTERM 안전 처리 — HAR 저장 보장
+    let closing = false;
+    const gracefulShutdown = async (signal: string) => {
+      if (closing) return;
+      closing = true;
+      log.warn(`${signal} 감지 — HAR 저장 중...`);
+      try {
+        await context.close();
+        await browser.close();
+      } catch { /* best effort */ }
+      process.exit(128 + (signal === 'SIGINT' ? 2 : 15)); // [FIX] 표준 exit code
+    };
+    const onSigint = () => gracefulShutdown('SIGINT');
+    const onSigterm = () => gracefulShutdown('SIGTERM');
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
 
-    log.info('브라우저가 열렸습니다.');
-    log.info('Sangfor 콘솔에서 설정 작업을 수행하세요.');
-    log.info('작업 완료 후 이 스크립트로 돌아와서 Enter를 누르세요.');
+    try {
+      // [FIX #3] goto 에러 핸들링 + 타임아웃
+      try {
+        await page.goto(config.targetUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: 30_000,
+        });
+      } catch (err) {
+        throw new Error(`타겟 접속 실패: ${config.targetUrl} — ${err}`);
+      }
 
-    // 사용자 입력 대기 (실제 환경에서는 stdin 또는 UI 연동)
-    await this.waitForUserAction(config.captureDurationMs ?? 120_000);
+      log.info('브라우저가 열렸습니다.');
+      log.info('Sangfor 콘솔에서 설정 작업을 수행하세요.');
+      log.info('작업 완료 후 이 스크립트로 돌아와서 Enter를 누르세요.');
 
-    // 쿠키 저장
-    const cookies = await context.cookies();
-    writeFileSync(cookiePath, JSON.stringify(cookies, null, 2), 'utf8');
+      // 사용자 입력 대기
+      await this.waitForUserAction(config.captureDurationMs ?? 120_000);
 
-    await context.close();
-    await browser.close();
+      // 쿠키 저장
+      const cookies = await context.cookies();
+      writeFileSync(cookiePath, JSON.stringify(cookies, null, 2), 'utf8');
 
-    log.info(`HAR 저장: ${harPath}`);
-    log.info(`쿠키 저장: ${cookiePath}`);
+      log.info(`HAR 저장: ${harPath}`);
+      log.info(`쿠키 저장: ${cookiePath}`);
 
-    return harPath;
+      return harPath;
+    } finally {
+      // [FIX #10] 시그널 리스너 정리 (named 참조 사용)
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+      if (!closing) {
+        await context.close().catch(() => {});
+        await browser.close().catch(() => {});
+      }
+    }
   }
 
   // ── 2단계: HAR 파싱 ──
@@ -157,7 +209,6 @@ export class SangforAPIDiscovery {
       const req = entry.request;
       const res = entry.response;
 
-      // 노이즈 필터링 (폰트, 이미지, analytics 등)
       const url = req.url;
       if (this.isNoiseRequest(url)) continue;
 
@@ -203,23 +254,28 @@ export class SangforAPIDiscovery {
     action: string,
     product: string,
   ): Promise<APIAnalysisResult> {
-    // 설정 변경 관련 요청만 필터링 (POST, PUT, PATCH)
-    const mutationCandidates = entries.filter(e =>
-      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(e.request.method) &&
-      e.request.path.includes('/api'),
+    // [FIX #5] dead code 해소: 필터된 엔트리를 LLM에도 전달
+    const isAPIPath = (path: string) =>
+      SangforAPIDiscovery.API_PATH_PATTERNS.some(p => path.includes(p));
+
+    const relevantEntries = entries.filter(e =>
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(e.request.method) ||
+      (e.request.method === 'GET' && isAPIPath(e.request.path)),
     );
 
-    const getEndpoints = entries.filter(e =>
-      e.request.method === 'GET' &&
-      e.request.path.includes('/api'),
-    );
+    const allRelevant = relevantEntries.length > 0 ? relevantEntries : entries;
 
-    log.info(`분석 대상: mutation ${mutationCandidates.length}개, GET ${getEndpoints.length}개`);
+    const mutationCount = allRelevant.filter(e =>
+      ['POST', 'PUT', 'PATCH', 'DELETE'].includes(e.request.method),
+    ).length;
+    const getCount = allRelevant.filter(e => e.request.method === 'GET').length;
 
-    // LLM에게 분석 요청
-    const prompt = this.buildAnalysisPrompt(entries, action, product);
+    log.info(`분석 대상: mutation ${mutationCount}개, GET ${getCount}개 (총 ${allRelevant.length}개)`);
+
+    // LLM에게 분석 요청 — 필터된 엔트리 전달
+    const prompt = this.buildAnalysisPrompt(allRelevant, action, product);
     const llmResponse = await this.callLLM(prompt);
-    const analysis = this.parseLLMResponse(llmResponse, entries);
+    const analysis = this.parseLLMResponse(llmResponse, allRelevant);
 
     return analysis;
   }
@@ -230,7 +286,6 @@ export class SangforAPIDiscovery {
     analysis: APIAnalysisResult,
     scenario: Scenario,
   ): ScenarioAPIEndpoint | null {
-    // 시나리오의 feature와 관련된 mutation 엔드포인트 찾기
     const featureLower = scenario.feature.toLowerCase();
 
     const candidates = analysis.mutationEndpoints.filter(ep => {
@@ -244,13 +299,12 @@ export class SangforAPIDiscovery {
 
     if (candidates.length === 0) return null;
 
-    // 가장 신뢰도 높은 엔드포인트 선택
     const best = candidates.sort((a, b) => b.confidence - a.confidence)[0];
 
     return {
       method: best.method,
-      url: best.path,
-      payload: best.body ? JSON.parse(best.body) : undefined,
+      url: best.url,  // [FIX] path만이 아닌 전체 URL 사용 (호스트 정보 보존)
+      payload: best.body ? (this.safeParseJSON(best.body) as Record<string, unknown> | undefined) : undefined,
       authType: 'bearer',
       discoveredBy: 'integuru_har',
       discoveredAt: nowISO(),
@@ -268,10 +322,8 @@ export class SangforAPIDiscovery {
       leaf: false,
     }));
 
-    // 동적 파라미터 추적
     for (const node of nodes) {
       for (const param of node.endpoint.dynamicParams) {
-        // 이 파라미터 값을 제공하는 다른 노드 찾기
         const source = nodes.find(n =>
           n.id !== node.id &&
           n.endpoint.responseSnippet.includes(param.value),
@@ -281,7 +333,6 @@ export class SangforAPIDiscovery {
         }
       }
 
-      // 의존성이 없으면 리프 노드 (쿠키/세션만으로 실행 가능)
       node.leaf = node.dependsOn.length === 0;
     }
 
@@ -304,7 +355,7 @@ export class SangforAPIDiscovery {
       scenario.source = {
         type: 'integuru_har',
         url: harPath,
-        confidence: apiEndpoint.confidence,
+        confidence: apiEndpoint.confidence ?? 0.5,  // [FIX] strict mode 타입 안전
         extractedAt: nowISO(),
       };
       log.info(`시나리오 [${scenario.id}]에 API 엔드포인트 연결: ${apiEndpoint.method} ${apiEndpoint.url}`);
@@ -315,19 +366,44 @@ export class SangforAPIDiscovery {
 
   // ── 내부 헬퍼 ──
 
+  /**
+   * [FIX #9] 노이즈 필터링 — .js는 endsWith로, .json과 구분
+   * 확장자는 URL 경로 끝에서만 매칭하여 .json API误필터링 방지
+   */
   private isNoiseRequest(url: string): boolean {
-    const noisePatterns = [
-      '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.ttf',
-      'google-analytics', 'googletagmanager', 'hotjar', 'mixpanel', 'segment',
-      'facebook.net', 'doubleclick.net', 'ads.', 'tracking.',
+    const staticExtensions = [
+      '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico',
+      '.woff', '.woff2', '.ttf', '.eot',
       '.css', '.map',
     ];
     const lower = url.toLowerCase();
+    const urlPath = lower.split('?')[0]; // 쿼리스트링 제거
+
+    // 확장자는 URL 경로 끝에서만 매칭
+    if (staticExtensions.some(ext => urlPath.endsWith(ext))) return true;
+
+    // .js는 정확히 끝부분만 매칭 (.json과 구분)
+    if (urlPath.endsWith('.js') || urlPath.endsWith('.mjs')) return true;
+
+    // 도메인/경로 기반 노이즈
+    const noisePatterns = [
+      'google-analytics', 'googletagmanager', 'hotjar', 'mixpanel', 'segment',
+      'facebook.net', 'doubleclick.net', 'ads.', 'tracking.',
+    ];
     return noisePatterns.some(p => lower.includes(p));
   }
 
   private buildAnalysisPrompt(entries: HAREntry[], action: string, product: string): string {
-    const requestSummaries = entries.slice(0, 50).map((e, i) => {
+    // [FIX #8] 원본 인덱스 보존 + mutation 우선 정렬
+    const indexed = entries.map((e, i) => ({ entry: e, originalIndex: i }));
+    indexed.sort((a, b) => {
+      const aMut = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(a.entry.request.method) ? 0 : 1;
+      const bMut = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(b.entry.request.method) ? 0 : 1;
+      return aMut - bMut;
+    });
+    const limited = indexed.slice(0, this.maxPromptEntries);
+
+    const requestSummaries = limited.map(({ entry: e, originalIndex: i }) => {
       const bodyPreview = e.request.body?.slice(0, 200) ?? '';
       return `[${i}] ${e.request.method} ${e.request.path} → ${e.response.status} (${e.response.mimeType})${bodyPreview ? `\n    Body: ${bodyPreview}` : ''}`;
     }).join('\n');
@@ -337,8 +413,11 @@ You are analyzing network traffic from a Sangfor ${product} security console.
 
 The user performed this action: "${action}"
 
-Here are the captured HTTP requests:
+Here are the captured HTTP requests (numbered by original capture order):
 ${requestSummaries}
+
+Pay special attention to requests with paths containing:
+/cgi-bin, /management, /rest, /auth, /webapi — these are common Sangfor API patterns.
 
 Analyze and identify:
 1. Which request(s) actually perform the setting change (mutation)?
@@ -400,13 +479,36 @@ Return JSON:
     }
   }
 
+  /**
+   * [FIX #7] 마크다운 코드 블록 우선 추출 + 중괄호 깊이 카운팅
+   */
   private parseLLMResponse(response: string, entries: HAREntry[]): APIAnalysisResult {
     try {
-      // JSON 추출 (마크다운 코드 블록 등 제거)
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('JSON not found in LLM response');
+      let jsonStr: string | null = null;
 
-      const parsed = JSON.parse(jsonMatch[0]);
+      // 1) 코드 블록 내 JSON 우선
+      const codeBlockMatch = response.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+      if (codeBlockMatch) {
+        jsonStr = codeBlockMatch[1].trim();
+      } else {
+        // 2) 중괄호 매칭 (중첩 지원)
+        const start = response.indexOf('{');
+        if (start !== -1) {
+          let depth = 0;
+          for (let i = start; i < response.length; i++) {
+            if (response[i] === '{') depth++;
+            if (response[i] === '}') depth--;
+            if (depth === 0) {
+              jsonStr = response.slice(start, i + 1);
+              break;
+            }
+          }
+        }
+      }
+
+      if (!jsonStr) throw new Error('JSON not found in LLM response');
+
+      const parsed = JSON.parse(jsonStr);
 
       const mutationEndpoints: APIEndpointCandidate[] = (parsed.mutationEndpoints ?? []).map((ep: any) => {
         const entry = entries[ep.index];
@@ -462,13 +564,46 @@ Return JSON:
     }
   }
 
+  /**
+   * [FIX #4] stdin paused 모드 해결 + autoMode 지원
+   * - autoMode: 타임아웃만 대기 (CI/헤드리스 환경)
+   * - 비-autoMode: stdin resume() → flowing 전환 후 data 이벤트 대기
+   */
   private async waitForUserAction(timeoutMs: number): Promise<void> {
+    if (this.autoMode) {
+      await new Promise(resolve => setTimeout(resolve, timeoutMs));
+      return;
+    }
+
     return new Promise((resolve) => {
-      const timer = setTimeout(resolve, timeoutMs);
-      process.stdin?.once?.('data', () => {
-        clearTimeout(timer);
-        resolve();
-      });
+      let resolved = false;
+      const cleanup = () => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          try { process.stdin?.pause(); } catch { /* ignore */ }
+          resolve();
+        }
+      };
+      const timer = setTimeout(cleanup, timeoutMs);
+
+      if (process.stdin && typeof process.stdin.resume === 'function') {
+        process.stdin.setEncoding('utf8');
+        process.stdin.resume();  // paused → flowing 전환
+        process.stdin.once('data', cleanup);
+      } else {
+        // stdin unavailable — fallback to timeout
+        cleanup();
+      }
     });
+  }
+
+  /**
+   * [FIX #6] safe JSON 파싱 — 비-JSON body 대응
+   * [REDTEAM] 반환 타입을 Record<string, unknown>으로 명시 (strict mode 대응)
+   */
+  private safeParseJSON(text: string): Record<string, unknown> {
+    try { return JSON.parse(text) as Record<string, unknown>; }
+    catch { return { _unparsed: text }; }
   }
 }
