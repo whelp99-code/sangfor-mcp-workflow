@@ -13,10 +13,10 @@
 import 'dotenv/config';
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loginSangforConsole } from './lib/sangfor-console-login.js';
+import { openSangforBrowser } from './lib/sangfor-browser.js';
 
 type Product = 'EPP' | 'IAG' | 'CC';
 
@@ -58,15 +58,18 @@ async function collectDomSnapshot(page: import('playwright').Page, product: Prod
     return {
       title: document.title,
       url: location.href,
-      labels: text('label, .x-form-item-label, h1, h2, h3, .x-panel-header-text'),
+      labels: text('label, .x-form-item-label, h1, h2, h3, .x-panel-header-text, .nav-label'),
       buttons: text('button, .x-btn, [role="button"]'),
+      extJsPanels: document.querySelectorAll('.x-panel, .x-container').length,
     };
   })()`);
+
+  const loggedIn = !dom.url.includes('login');
 
   return {
     id: `snap_${Date.now().toString(36)}`,
     product,
-    version: dom.title.includes('EPP') ? '6.0.4EN' : 'latest',
+    version: dom.title || 'latest',
     capturedAt: new Date().toISOString(),
     targetUrl,
     sections: {
@@ -75,18 +78,19 @@ async function collectDomSnapshot(page: import('playwright').Page, product: Prod
         items: {
           pageTitle: dom.title,
           currentUrl: dom.url,
-          loginState: dom.url.includes('login') ? 'login_required' : 'authenticated',
+          loginState: loggedIn ? 'authenticated' : 'login_required',
+          extJsPanels: String(dom.extJsPanels),
         },
       },
       policy: {
         title: 'UI 요약',
         items: {
-          visibleLabels: dom.labels.slice(0, 5).join(' | ') || 'n/a',
+          visibleLabels: dom.labels.slice(0, 8).join(' | ') || 'n/a',
           visibleButtons: dom.buttons.slice(0, 5).join(' | ') || 'n/a',
         },
       },
     },
-    metadata: { source: 'playwright-readonly-dom', readOnly: true },
+    metadata: { source: 'playwright-readonly-dom', readOnly: true, authenticated: String(loggedIn) },
   };
 }
 
@@ -140,9 +144,11 @@ async function main() {
   };
 
   // Phase 1: browser read-only snapshot
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ ignoreHTTPSErrors: true });
-  const page = await context.newPage();
+  const browserSession = await openSangforBrowser({
+    product,
+    headless: product === 'CC' ? false : true,
+  });
+  const page = browserSession.page;
 
   try {
     const login = await loginSangforConsole(page, {
@@ -204,8 +210,7 @@ async function main() {
       server.kill('SIGTERM');
     }
   } finally {
-    await context.close().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    await browserSession.close().catch(() => undefined);
   }
 
   report.finishedAt = new Date().toISOString();

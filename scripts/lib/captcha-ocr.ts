@@ -94,29 +94,25 @@ export async function ocrCaptchaImage(
 ): Promise<{ success: boolean; text?: string; error?: string }> {
   const scaledPath = scaleCaptchaImage(imagePath);
 
+  const tesseractText = ocrWithTesseract(scaledPath);
+  if (tesseractText) {
+    return { success: true, text: tesseractText };
+  }
+
   try {
     const visionText = await ocrWithLmStudio(scaledPath);
     if (visionText) {
       return { success: true, text: visionText };
     }
   } catch (error) {
-    const tesseractText = ocrWithTesseract(scaledPath);
-    if (tesseractText) {
-      return { success: true, text: tesseractText };
-    }
     return {
       success: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
 
-  const tesseractText = ocrWithTesseract(scaledPath);
-  if (tesseractText) {
-    return { success: true, text: tesseractText };
-  }
-
   return {
     success: false,
-    error: 'CAPTCHA OCR failed (LM Studio vision + tesseract)',
+    error: 'CAPTCHA OCR failed (tesseract + LM Studio vision)',
   };
 }

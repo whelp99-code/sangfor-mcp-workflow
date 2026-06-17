@@ -11,6 +11,12 @@ importers:
       '@sangfor/chrome':
         specifier: file:../whelp99-code-sangfor-engineer-mcp/packages/sangfor-chrome
         version: file:../whelp99-code-sangfor-engineer-mcp/packages/sangfor-chrome
+      '@sangfor/health-checker':
+        specifier: workspace:*
+        version: link:packages/health-checker
+      '@sangfor/wiki-sync':
+        specifier: workspace:*
+        version: link:packages/wiki-sync
       '@types/multer':
         specifier: ^2.1.0
         version: 2.1.0
@@ -120,9 +126,15 @@ importers:
 
   packages/wiki-sync:
     dependencies:
+      '@sangfor/health-checker':
+        specifier: workspace:*
+        version: link:../health-checker
       '@sangfor/workflow-core':
         specifier: workspace:*
         version: link:../workflow-core
+      '@sangfor/workflow-engine':
+        specifier: workspace:*
+        version: link:../workflow-engine
       '@sangfor/workflow-shared':
         specifier: workspace:*
         version: link:../shared

@@ -6,3 +6,7 @@ export * from './health-checker.js';
 export * from './snapshot-comparator.js';
 export * from './default-configs.js';
 export * from './device-snapshot.js';
+export * from './device-collection-types.js';
+export * from './cc-collection-types.js';
+export * from './device-snapshot-builder.js';
+export * from './cc-snapshot-builder.js';

@@ -12,6 +12,7 @@ import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loginSangforConsole } from './lib/sangfor-console-login.js';
+import { openSangforBrowser } from './lib/sangfor-browser.js';
 
 type Product = 'EPP' | 'IAG' | 'CC';
 
@@ -46,7 +47,7 @@ function readOptions(): E2EOptions {
     targetUrl: getArg('--target') ?? process.env[`${product}_TARGET_URL`] ?? DEFAULT_URLS[product],
     outputDir: getArg('--output') ?? join(process.cwd(), 'outputs', 'sangfor-readonly-e2e'),
     durationMs: Number(getArg('--duration-ms') ?? '8000'),
-    headless: !args.includes('--headed'),
+    headless: product === 'CC' || product === 'EPP' ? false : !args.includes('--headed'),
   };
 }
 
@@ -66,17 +67,12 @@ async function main() {
   const screenshotPath = join(options.outputDir, `${options.product.toLowerCase()}-${stamp}.png`);
   const reportPath = join(options.outputDir, `${options.product.toLowerCase()}-${stamp}.json`);
 
-  const browser = await chromium.launch({ headless: options.headless });
-  const context = await browser.newContext({
-    ignoreHTTPSErrors: true,
-    recordHar: {
-      path: harPath,
-      content: 'embed',
-      mode: 'full',
-    },
+  const browserSession = await openSangforBrowser({
+    product: options.product,
+    headless: options.headless,
+    harPath: harPath,
   });
-
-  const page = await context.newPage();
+  const page = browserSession.page;
   const startedAt = new Date().toISOString();
   const errors: string[] = [];
   let loginResult: Awaited<ReturnType<typeof loginSangforConsole>> | null = null;
@@ -155,8 +151,7 @@ async function main() {
     }, null, 2), 'utf8');
     throw err;
   } finally {
-    await context.close().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+    await browserSession.close().catch(() => undefined);
   }
 
   console.log(`read-only E2E report: ${reportPath}`);

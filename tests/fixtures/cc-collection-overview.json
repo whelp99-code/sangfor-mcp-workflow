@@ -1,0 +1,29 @@
+{
+  "product": "CC",
+  "targetUrl": "https://10.80.1.107",
+  "deviceId": "cc_mqhz83lk",
+  "version": "V3.0.98C",
+  "collectedAt": "2026-06-17T11:14:25.082Z",
+  "loginUrl": "https://10.80.1.107/ui/#/overview",
+  "menus": [
+    {
+      "id": "overview",
+      "name": "Overview",
+      "menuPath": ["Dashboard", "Overview"],
+      "hashRoute": "/#/overview",
+      "url": "https://10.80.1.107/ui/#/overview",
+      "status": "ok",
+      "screenshotPath": "outputs/sangfor-readonly-e2e/cc-2026-06-17T11-14-05-114Z.png",
+      "capturedAt": "2026-06-17T11:14:25.082Z",
+      "domSummary": {
+        "title": "Cyber Command",
+        "url": "https://10.80.1.107/ui/#/overview",
+        "panels": 115,
+        "tables": 5,
+        "gridRows": 20,
+        "labels": ["V3.0.98C", "Pending Risks 537", "GravityRAT", "10.80.1.102"],
+        "metrics": { "pendingRisks": 537, "pendingServers": 2, "pendingHosts": 16, "hotIncidents": 9 }
+      }
+    }
+  ]
+}
