@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { loginSangforConsole } from './lib/sangfor-console-login.js';
 
 type Product = 'EPP' | 'IAG' | 'CC';
 
@@ -46,52 +47,6 @@ function readCredentials(product: Product) {
     throw new Error(`Set ${product}_USERNAME and ${product}_PASSWORD in .env`);
   }
   return { username, password };
-}
-
-async function tryLogin(page: import('playwright').Page, targetUrl: string, username: string, password: string) {
-  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.waitForTimeout(2000);
-
-  const onLoginPage = await page.locator('input[type="password"]').count() > 0;
-  if (!onLoginPage) {
-    return { loginAttempted: false, loggedIn: true, url: page.url() };
-  }
-
-  const eula = page.locator('input[type="checkbox"]').first();
-  if (await eula.count()) {
-    await eula.check({ force: true }).catch(() => undefined);
-  }
-
-  const captchaImg = page.locator('img[src*="captcha"], img[src*="verify"], img[id*="captcha"]').first();
-  let captchaText = '';
-  if (await captchaImg.count()) {
-    const captchaPath = join(process.cwd(), 'outputs', 'auto-ops-e2e', 'captcha.png');
-    mkdirSync(join(process.cwd(), 'outputs', 'auto-ops-e2e'), { recursive: true });
-    await captchaImg.screenshot({ path: captchaPath }).catch(() => undefined);
-    captchaText = await page.evaluate(`(() => {
-      const img = document.querySelector('img[src*="captcha"], img[src*="verify"], img[id*="captcha"]');
-      return img && img.alt ? img.alt.trim() : '';
-    })()`).catch(() => '');
-  }
-
-  await page.locator(
-    'input[name="user"], input[name="username"], input[name="account"], input[name="name"], input[type="text"]',
-  ).first().fill(username);
-  await page.locator('input[type="password"]').first().fill(password);
-
-  if (captchaText) {
-    await page.locator('input[name="captcha"], input[name="verify_code"], input[name="code"]').first()
-      .fill(captchaText).catch(() => undefined);
-  }
-
-  await page.locator(
-    'button:has-text("Log In"), button:has-text("Login"), button:has-text("로그인"), input[type="submit"]',
-  ).first().click({ timeout: 5000 }).catch(() => undefined);
-  await page.waitForTimeout(5000);
-
-  const url = page.url();
-  const loggedIn = !url.includes('login');
-  return { loginAttempted: true, loggedIn, url, captchaText };
 }
 
 async function collectDomSnapshot(page: import('playwright').Page, product: Product, targetUrl: string) {
@@ -190,7 +145,12 @@ async function main() {
   const page = await context.newPage();
 
   try {
-    const login = await tryLogin(page, targetUrl, credentials.username, credentials.password);
+    const login = await loginSangforConsole(page, {
+      product,
+      targetUrl,
+      username: credentials.username,
+      password: credentials.password,
+    });
     const snapshot = await collectDomSnapshot(page, product, targetUrl);
     report.phases.browser = { login, snapshotId: snapshot.id, loggedIn: login.loggedIn };
     writeFileSync(join(outputDir, `${product.toLowerCase()}-snapshot.json`), JSON.stringify(snapshot, null, 2));

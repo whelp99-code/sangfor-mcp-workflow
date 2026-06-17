@@ -11,6 +11,7 @@ import 'dotenv/config';
 import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { loginSangforConsole } from './lib/sangfor-console-login.js';
 
 type Product = 'EPP' | 'IAG' | 'CC';
 
@@ -78,28 +79,21 @@ async function main() {
   const page = await context.newPage();
   const startedAt = new Date().toISOString();
   const errors: string[] = [];
-  let loginAttempted = false;
+  let loginResult: Awaited<ReturnType<typeof loginSangforConsole>> | null = null;
 
   try {
-    await page.goto(options.targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
-
-    const hasPassword = await page.locator('input[type="password"]').count().then(count => count > 0);
-    if (hasPassword && credentials) {
-      loginAttempted = true;
-      await page.locator(
-        'input[name="user"], input[name="username"], input[name="account"], input[name="name"], input[type="text"]',
-      ).first().fill(credentials.username, { timeout: 5000 }).catch((err) => {
-        errors.push(`username fill failed: ${String(err)}`);
+    if (credentials) {
+      loginResult = await loginSangforConsole(page, {
+        product: options.product,
+        targetUrl: options.targetUrl,
+        username: credentials.username,
+        password: credentials.password,
       });
-      await page.locator('input[type="password"]').first().fill(credentials.password, { timeout: 5000 }).catch((err) => {
-        errors.push(`password fill failed: ${String(err)}`);
-      });
-      await page.locator(
-        'button:has-text("Log In"), button:has-text("Login"), button:has-text("로그인"), input[type="submit"], input[id="button"], .x-btn',
-      ).first().click({ timeout: 5000 }).catch((err) => {
-        errors.push(`login click failed: ${String(err)}`);
-      });
+      if (loginResult.error) {
+        errors.push(loginResult.error);
+      }
+    } else {
+      await page.goto(options.targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
     }
 
@@ -134,7 +128,7 @@ async function main() {
       startedAt,
       finishedAt: new Date().toISOString(),
       readOnly: true,
-      loginAttempted,
+      login: loginResult,
       credentialsAvailable: Boolean(credentials),
       artifacts: {
         harPath,
@@ -151,7 +145,7 @@ async function main() {
       startedAt,
       finishedAt: new Date().toISOString(),
       readOnly: true,
-      loginAttempted,
+      login: loginResult,
       credentialsAvailable: Boolean(credentials),
       artifacts: {
         harPath,
