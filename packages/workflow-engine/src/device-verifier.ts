@@ -65,6 +65,8 @@ export class DeviceVerifier {
   private apiDiscovery: SangforAPIDiscovery;
   private outputDir: string;
   private cdpPort: number;
+  private browser: Browser | null = null;
+  private currentPage: Page | null = null;
 
   constructor(options: {
     scenarioDB: ScenarioDB;
@@ -142,6 +144,8 @@ export class DeviceVerifier {
         selectorFound: false,
         error: String(err),
       });
+    } finally {
+      await this.close();
     }
 
     const duration = Date.now() - startTime;
@@ -411,21 +415,34 @@ export class DeviceVerifier {
   // ── 내부 헬퍼 ──
 
   private async connectToDevice(targetUrl: string): Promise<Page> {
+    if (this.browser?.isConnected() && this.currentPage && !this.currentPage.isClosed()) {
+      return this.currentPage;
+    }
+
     const cdpEndpoint = `http://127.0.0.1:${this.cdpPort}`;
 
     try {
-      const browser = await chromium.connectOverCDP(cdpEndpoint);
-      const context = browser.contexts()[0];
+      this.browser = await chromium.connectOverCDP(cdpEndpoint);
+      const context = this.browser.contexts()[0];
       if (!context) throw new Error('브라우저 컨텍스트 없음');
 
       const host = targetUrl.split('://')[1]?.split('/')[0] ?? '';
       const existingPage = context.pages().find(p => p.url().includes(host));
-      if (existingPage) return existingPage;
-
-      return context.pages()[0] ?? await context.newPage();
+      this.currentPage = existingPage ?? context.pages()[0] ?? await context.newPage();
+      return this.currentPage;
     } catch {
+      this.browser = null;
+      this.currentPage = null;
       throw new Error(`Chrome CDP 연결 실패: ${cdpEndpoint}`);
     }
+  }
+
+  async close(): Promise<void> {
+    if (this.browser?.isConnected()) {
+      await this.browser.close().catch(() => {});
+    }
+    this.browser = null;
+    this.currentPage = null;
   }
 
   private async tryMenuNavigation(page: Page, scenario: Scenario): Promise<{ success: boolean }> {

@@ -581,8 +581,9 @@ export class SangforAutoConfig {
       }
     }
 
-    // dry-run 기본값 적용
-    const isDryRun = step.input['dryRun'] === true || !step.requiresApproval;
+    // dry-run은 승인 여부와 독립적으로 판단: 기본 true, 명시적으로 false일 때만 실실행
+    const isDryRun = step.input['dryRun'] !== false;
+    const executionApproved = step.input['executionApproved'] === true;
 
     if (isDryRun) {
       log.info(`[DRY-RUN] Step ${step.id}: ${step.title} — 실행 생략`);
@@ -593,6 +594,16 @@ export class SangforAutoConfig {
         errors: [],
         duration: Date.now() - startTime,
         dryRun: true,
+      };
+    }
+    if (!executionApproved) {
+      return {
+        stepId: step.id,
+        success: false,
+        output: {},
+        errors: ['Execution blocked: explicit approved execution context required'],
+        duration: Date.now() - startTime,
+        dryRun: false,
       };
     }
 
@@ -712,6 +723,12 @@ export class SangforAutoConfig {
       }
     } catch (err) {
       errors.push(`실행 오류: ${String(err)}`);
+    } finally {
+      // 단일 step 실행 경로는 기본적으로 연결을 정리해 누수를 방지한다.
+      const keepSession = step.input['reuseSession'] === true;
+      if (!keepSession) {
+        await this.close();
+      }
     }
 
     return {

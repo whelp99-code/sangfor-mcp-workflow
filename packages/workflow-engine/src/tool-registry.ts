@@ -3,7 +3,7 @@
  */
 
 import { nowId, createLogger } from '@sangfor/workflow-shared';
-import type { ToolDefinition, ProductCode } from './types.js';
+import type { ToolDefinition, ProductCode, RiskLevel } from './types.js';
 import { McpStdioClient } from './mcp-client.js';
 
 const log = createLogger('tool-registry');
@@ -49,8 +49,8 @@ export class ToolRegistry {
         category: this.categorizeTool(mcpTool.name),
         tags: this.extractTags(mcpTool.name),
         estimatedDuration: '10s',
-        riskLevel: 'low',
-        requiresApproval: false,
+        riskLevel: this.inferRiskLevel(mcpTool.name),
+        requiresApproval: this.inferRequiresApproval(mcpTool.name),
         handler: async (args: any) => {
           if (!this.mcpClient) throw new Error('MCP client not connected');
           return this.mcpClient.callTool(mcpTool.name, args);
@@ -154,6 +154,27 @@ export class ToolRegistry {
 
     if (tags.length === 0) tags.push('product-agnostic');
     return tags;
+  }
+
+  private inferRiskLevel(name: string): RiskLevel {
+    const lower = name.toLowerCase();
+    const criticalPattern = /(delete|remove|restart|reboot|reset|drop)/i;
+    const highPattern = /(apply|configure|update|write|set|change|modify|create)/i;
+    const readonlyPattern = /^(get|list|search|read|check|verify|describe|status|health)/i;
+
+    if (criticalPattern.test(lower)) return 'critical';
+    if (highPattern.test(lower)) return 'high';
+    if (readonlyPattern.test(lower)) return 'low';
+    return 'medium';
+  }
+
+  private inferRequiresApproval(name: string): boolean {
+    const lower = name.toLowerCase();
+    const readonlyPattern = /^(get|list|search|read|check|verify|describe|status|health)/i;
+    if (readonlyPattern.test(lower)) {
+      return false;
+    }
+    return true;
   }
 
   // ─── PR-25: 저수준 클릭 tool 필터링 ───────────────────────────────────────

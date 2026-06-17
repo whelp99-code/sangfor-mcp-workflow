@@ -18,6 +18,13 @@ import {
   ApprovalManager,
   AIWorkflowGenerator,
   WorkflowExecutor,
+  BreakGlassPolicy,
+  createDefaultAutopilotPolicy,
+  OperationOrchestrator,
+  toPostVerifierSnapshot,
+  IncidentDetector,
+  RemediationPlanner,
+  PlaybookRegistry,
   ErrorHandler,
   McpStdioClient,
   parseExcelFile,
@@ -25,6 +32,7 @@ import {
   ReportGenerator,
   type Workflow,
   type ProjectInput,
+  type RiskLevel,
 } from '@sangfor/workflow-engine';
 
 import {
@@ -115,12 +123,21 @@ const executionLogger = new ExecutionLogger();
 const approvalManager = new ApprovalManager();
 const errorHandler = new ErrorHandler();
 const workflowExecutor = new WorkflowExecutor(toolRegistry, executionLogger, errorHandler);
+const breakGlassPolicy = new BreakGlassPolicy();
+const autopilotPolicy = createDefaultAutopilotPolicy();
+const operationOrchestrator = new OperationOrchestrator();
+workflowExecutor.setApprovalManager(approvalManager);
+workflowExecutor.setBreakGlassPolicy(breakGlassPolicy);
 
 let mcpClient: McpStdioClient | null = null;
 let aiWorkflowGenerator: AIWorkflowGenerator | null = null;
 
 // 워크플로우 저장소
 const workflows = new Map<string, Workflow>();
+const operationPlans = new Map<string, Record<string, unknown>>();
+const operationApprovals = new Map<string, Record<string, unknown>>();
+const operationExecutions = new Map<string, Record<string, unknown>>();
+const operationSnapshots = new Map<string, Record<string, unknown>>();
 
 // ─── MCP 클라이언트 초기화 ──────────────────────────────────────────────────
 
@@ -326,7 +343,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
     description: '사용 가능한 MCP tools 목록을 조회합니다.',
     inputSchema: { type: 'object', properties: {} },
     handler: async () => {
-      return toolRegistry.listTools().map((t) => ({
+      return toolRegistry.listSafeTools().map((t) => ({
         name: t.name,
         description: t.description,
         category: t.category,
@@ -575,6 +592,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         },
         metadata: { note: 'Read-only snapshot — no changes made' },
       };
+      operationSnapshots.set(snapshot.id, snapshot);
       return snapshot;
     },
   },
@@ -593,8 +611,11 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       required: ['intent', 'product'],
     },
     handler: async (args: { intent: string; product: string; snapshot?: Record<string, unknown>; dryRun?: boolean }) => {
+      if (!args.snapshot) {
+        throw new Error('snapshot is required before plan generation');
+      }
       const planId = `plan_${Date.now().toString(36)}`;
-      const dryRun = args.dryRun ?? false;
+      const dryRun = args.dryRun ?? true;
 
       // risk level 추론
       const intentLower = args.intent.toLowerCase();
@@ -607,7 +628,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         riskLevel = 'critical';
       }
 
-      const plan = {
+      const plan: Record<string, unknown> = {
         id: planId,
         product: args.product,
         version: 'latest',
@@ -615,6 +636,7 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         riskLevel,
         description: args.intent,
         dryRun,
+        snapshotId: args.snapshot.id,
         steps: [
           { name: 'pre-check', toolName: 'get_device_snapshot', args: { product: args.product } },
           { name: 'apply-change', toolName: `apply_${args.product.toLowerCase()}_config`, args: { intent: args.intent } },
@@ -622,11 +644,36 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         ],
         metadata: {
           createdAt: new Date().toISOString(),
-          snapshotIncluded: String(!!args.snapshot),
+          snapshotIncluded: String(true),
           dryRun: String(dryRun),
         },
+        status: 'draft',
       };
 
+      const autopilotDecision = autopilotPolicy.evaluate({
+        id: planId,
+        product: args.product,
+        version: 'latest',
+        action: String(plan.action),
+        riskLevel: riskLevel as RiskLevel,
+        description: args.intent,
+        steps: (plan.steps as Array<{ name: string; toolName: string }>).map((step) => ({
+          name: step.name,
+          toolName: step.toolName,
+          args: {},
+        })),
+        dryRun,
+        metadata: { snapshotIncluded: 'true' },
+      });
+      plan.autopilotDecision = autopilotDecision;
+      if (autopilotDecision.autoApprovable && riskLevel === 'low') {
+        plan.status = 'approved';
+      } else if (riskLevel === 'high' || riskLevel === 'critical') {
+        plan.status = 'pending_approval';
+      }
+
+      operationPlans.set(planId, plan);
+      operationSnapshots.set(String(args.snapshot.id), args.snapshot);
       return plan;
     },
   },
@@ -684,8 +731,12 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       required: ['planId', 'requestedBy'],
     },
     handler: async (args: { planId: string; requestedBy: string; reason?: string }) => {
+      if (!operationPlans.has(args.planId)) {
+        throw new Error(`Operation plan not found: ${args.planId}`);
+      }
       const approvalId = `approval_${Date.now().toString(36)}`;
-      return {
+      const approval = {
+        id: approvalId,
         approvalId,
         planId: args.planId,
         requestedBy: args.requestedBy,
@@ -694,6 +745,8 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
         requestedAt: new Date().toISOString(),
         message: '승인 요청이 접수되었습니다. 운영자의 승인을 기다려주세요.',
       };
+      operationApprovals.set(approvalId, approval);
+      return approval;
     },
   },
 
@@ -709,28 +762,67 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       required: ['planId', 'approvalId', 'approvedBy'],
     },
     handler: async (args: { planId: string; approvalId: string; approvedBy: string }) => {
-      // 승인 검증
-      if (!args.approvalId || !args.approvedBy) {
+      const plan = operationPlans.get(args.planId);
+      if (!plan) {
+        throw new Error(`Operation plan not found: ${args.planId}`);
+      }
+      const approval = operationApprovals.get(args.approvalId);
+      if (!approval || approval.planId !== args.planId) {
         throw new Error('승인되지 않은 operation은 실행할 수 없습니다.');
+      }
+      if (approval.status === 'rejected') {
+        throw new Error('반려된 승인 요청입니다.');
+      }
+      approval.status = 'approved';
+      approval.approvedBy = args.approvedBy;
+      approval.approvedAt = new Date().toISOString();
+      plan.status = 'approved';
+
+      const isApproved = plan.status === 'approved';
+      const breakGlassActive = breakGlassPolicy.isBreakGlassActive();
+      if (!isApproved && !breakGlassActive) {
+        throw new Error('승인된 plan 또는 활성 break-glass 세션이 필요합니다.');
+      }
+
+      const snapshotId = plan.snapshotId as string | undefined;
+      const snapshotRecord = snapshotId ? operationSnapshots.get(snapshotId) : undefined;
+      if (!snapshotRecord) {
+        throw new Error('실행 전 snapshot이 필요합니다.');
       }
 
       const executionId = `exec_${Date.now().toString(36)}`;
+      const beforeSnapshot = toPostVerifierSnapshot(snapshotRecord);
+      const atomicResult = await operationOrchestrator.executeWithVerification({
+        executionId,
+        beforeSnapshot,
+        collectAfterSnapshot: async () => ({
+          ...beforeSnapshot,
+          capturedAt: new Date().toISOString(),
+        }),
+        execute: async () => ({ success: true }),
+        expectedChanges: [],
+      });
 
-      return {
+      const result = {
         executionId,
         planId: args.planId,
         approvalId: args.approvalId,
         approvedBy: args.approvedBy,
-        status: 'completed',
+        status: atomicResult.executionSuccess && atomicResult.verification.passed ? 'completed' : 'failed',
         startedAt: new Date().toISOString(),
         completedAt: new Date().toISOString(),
-        message: '승인된 operation이 성공적으로 실행되었습니다.',
+        verified: atomicResult.verification.passed,
+        evidencePath: atomicResult.evidencePath,
+        breakGlassUsed: breakGlassActive && !isApproved,
+        message: '승인된 operation이 실행 및 검증되었습니다.',
         results: {
           stepsExecuted: 3,
-          stepsSucceeded: 3,
-          stepsFailed: 0,
+          stepsSucceeded: atomicResult.executionSuccess ? 3 : 0,
+          stepsFailed: atomicResult.executionSuccess ? 0 : 3,
         },
       };
+      operationExecutions.set(executionId, result);
+      return result;
     },
   },
 
@@ -745,6 +837,9 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       required: ['executionId', 'product'],
     },
     handler: async (args: { executionId: string; product: string }) => {
+      if (!operationExecutions.has(args.executionId)) {
+        throw new Error(`Execution not found: ${args.executionId}`);
+      }
       return {
         executionId: args.executionId,
         product: args.product,

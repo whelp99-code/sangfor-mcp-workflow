@@ -8,12 +8,13 @@ import type {
   WorkflowStep,
   WorkflowExecutionResult,
   ExecutionLog,
-  StepStatus,
-  WorkflowStatus,
+  RiskLevel,
 } from './types.js';
 import { ToolRegistry } from './tool-registry.js';
 import { ExecutionLogger } from './execution-logger.js';
 import { ErrorHandler } from './error-handler.js';
+import { ApprovalManager } from './approval-manager.js';
+import { BreakGlassPolicy } from './breakglass-policy.js';
 
 const log = createLogger('workflow-executor');
 
@@ -21,6 +22,8 @@ export class WorkflowExecutor {
   private toolRegistry: ToolRegistry;
   private executionLogger: ExecutionLogger;
   private errorHandler: ErrorHandler;
+  private approvalManager: ApprovalManager | null = null;
+  private breakGlassPolicy: BreakGlassPolicy | null = null;
 
   constructor(
     toolRegistry: ToolRegistry,
@@ -30,6 +33,14 @@ export class WorkflowExecutor {
     this.toolRegistry = toolRegistry;
     this.executionLogger = executionLogger;
     this.errorHandler = errorHandler;
+  }
+
+  setApprovalManager(approvalManager: ApprovalManager): void {
+    this.approvalManager = approvalManager;
+  }
+
+  setBreakGlassPolicy(policy: BreakGlassPolicy): void {
+    this.breakGlassPolicy = policy;
   }
 
   // 워크플로우 실행
@@ -43,6 +54,7 @@ export class WorkflowExecutor {
     const results: Map<string, any> = new Map();
     const executionLogs: ExecutionLog[] = [];
     const errors: Array<{ stepId: string; error: string }> = [];
+    const retryCounts = new Map<string, number>();
 
     let stepsExecuted = 0;
     let stepsSucceeded = 0;
@@ -90,6 +102,8 @@ export class WorkflowExecutor {
           throw new Error(`Tool not found: ${step.toolName}`);
         }
 
+        this.assertExecutionAllowed(workflow, step, tool.riskLevel, tool.requiresApproval);
+
         log.info(`Executing step: ${step.toolName}`);
         const result = await tool.handler(injectedArgs);
 
@@ -110,12 +124,15 @@ export class WorkflowExecutor {
         // 에러 처리
         const errorDecision = await this.errorHandler.handleError(step, error);
         const errorMessage = error instanceof Error ? error.message : String(error);
+        const retryCount = retryCounts.get(step.id) ?? 0;
 
         log.warn(`Step failed: ${step.toolName} - ${errorDecision.action}: ${errorDecision.reason}`);
 
-        if (errorDecision.action === 'retry' && step.retryPolicy.maxRetries > logEntry.retryCount) {
+        if (errorDecision.action === 'retry' && retryCount < step.retryPolicy.maxRetries) {
           // 재시도
-          logEntry.retryCount++;
+          const nextRetryCount = retryCount + 1;
+          retryCounts.set(step.id, nextRetryCount);
+          logEntry.retryCount = nextRetryCount;
           step.status = 'pending';
           stepsExecuted--; // 다시 시도할 것이므로 카운트 감소
 
@@ -243,6 +260,44 @@ export class WorkflowExecutor {
   // 지연 함수
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private assertExecutionAllowed(
+    workflow: Workflow,
+    step: WorkflowStep,
+    riskLevel: RiskLevel,
+    requiresApproval: boolean,
+  ): void {
+    const explicitMutationStep = /apply|create|update|delete|remove|restart|reboot|write|configure/i.test(
+      step.toolName,
+    );
+    const highRisk = riskLevel === 'high' || riskLevel === 'critical';
+    const needsApproval = requiresApproval || highRisk || explicitMutationStep;
+
+    if (!needsApproval) {
+      return;
+    }
+
+    if (workflow.status === 'approved') {
+      return;
+    }
+
+    const breakGlassRequestId = workflow.metadata?.['breakGlassRequestId'];
+    if (typeof breakGlassRequestId === 'string' && this.breakGlassPolicy?.isRequestActive(breakGlassRequestId)) {
+      return;
+    }
+
+    if (this.breakGlassPolicy?.isBreakGlassActive()) {
+      return;
+    }
+
+    if (this.approvalManager?.isPending(workflow.id)) {
+      throw new Error(`Approval required before executing sensitive step: ${step.toolName}`);
+    }
+
+    throw new Error(
+      `Execution blocked: workflow ${workflow.id} is not approved for sensitive step ${step.toolName}`,
+    );
   }
 
   // 워크플로우 일시정지

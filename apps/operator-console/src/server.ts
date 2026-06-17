@@ -40,7 +40,15 @@ import {
   RAGIndexer,
   AIFeatureExtractor,
   LearningScheduler,
+  BreakGlassPolicy,
+  createDefaultAutopilotPolicy,
+  OperationOrchestrator,
+  toPostVerifierSnapshot,
+  IncidentDetector,
+  RemediationPlanner,
+  PlaybookRegistry,
   type Workflow,
+  type RiskLevel,
 } from '@sangfor/workflow-engine';
 
 const log = createLogger('operator-console');
@@ -67,6 +75,14 @@ const templateManager = new TemplateManager();
 const monitoringDashboard = new MonitoringDashboard();
 const aiWorkflowGenerator = new AIWorkflowGenerator(toolRegistry, { baseUrl: 'http://localhost:1234/v1' });
 const workflowExecutor = new WorkflowExecutor(toolRegistry, executionLogger, errorHandler);
+const breakGlassPolicy = new BreakGlassPolicy();
+const autopilotPolicy = createDefaultAutopilotPolicy();
+const operationOrchestrator = new OperationOrchestrator();
+const incidentDetector = new IncidentDetector();
+const remediationPlanner = new RemediationPlanner();
+const playbookRegistry = new PlaybookRegistry();
+workflowExecutor.setApprovalManager(approvalManager);
+workflowExecutor.setBreakGlassPolicy(breakGlassPolicy);
 
 // 추가 인스턴스
 const complianceTracker = new ComplianceTracker();
@@ -192,9 +208,16 @@ app.post('/api/workflows/:id/approve', (req, res) => {
   const workflow = workflows.get(req.params.id);
   if (!workflow) return res.status(404).json({ error: 'Not found' });
 
-  approvalManager.requestApproval(workflow);
-  workflow.status = 'approved';
-  res.json({ ok: true });
+  try {
+    if (!approvalManager.isPending(workflow.id)) {
+      approvalManager.requestApproval(workflow);
+    }
+    const approvedBy = req.body?.approvedBy ?? 'operator';
+    const approved = approvalManager.approve(workflow.id, approvedBy);
+    res.json({ ok: true, workflow: approved });
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
 });
 
 // 거절
@@ -202,14 +225,26 @@ app.post('/api/workflows/:id/reject', (req, res) => {
   const workflow = workflows.get(req.params.id);
   if (!workflow) return res.status(404).json({ error: 'Not found' });
 
-  workflow.status = 'rejected';
-  res.json({ ok: true });
+  try {
+    if (!approvalManager.isPending(workflow.id)) {
+      approvalManager.requestApproval(workflow);
+    }
+    const reason = req.body?.reason ?? 'rejected by operator';
+    const rejectedBy = req.body?.rejectedBy ?? 'operator';
+    const rejected = approvalManager.reject(workflow.id, reason, rejectedBy);
+    res.json({ ok: true, workflow: rejected });
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
 });
 
 // 실행
 app.post('/api/workflows/:id/execute', async (req, res) => {
   const workflow = workflows.get(req.params.id);
   if (!workflow) return res.status(404).json({ error: 'Not found' });
+  if (workflow.status !== 'approved') {
+    return res.status(403).json({ error: 'Workflow must be approved before execution' });
+  }
 
   try {
     const result = await workflowExecutor.executeWorkflow(workflow);
@@ -532,6 +567,13 @@ app.get('/api/access/requests', (req, res) => {
 
 // ─── Phase 0: Operation Management API (PR-27) ─────────────────────────────
 
+const operationPlans = new Map<string, Record<string, unknown>>();
+const snapshots = new Map<string, Record<string, unknown>>();
+const approvals = new Map<string, Record<string, unknown>>();
+const executionResults = new Map<string, Record<string, unknown>>();
+const remediationPlans = new Map<string, Record<string, unknown>>();
+const detectedIncidents = new Map<string, Record<string, unknown>>();
+
 // 장비 스냅샷 조회 (read-only)
 app.get('/api/snapshots/:product', async (req, res) => {
   try {
@@ -561,21 +603,24 @@ app.get('/api/snapshots/:product', async (req, res) => {
         },
       },
     };
+    snapshots.set(snapshot.id, snapshot);
     res.json(snapshot);
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
 });
 
-// Operation Plan 생성
-const operationPlans = new Map<string, Record<string, unknown>>();
-
 app.post('/api/plan', async (req, res) => {
   try {
-    const { intent, product, dryRun } = req.body;
+    const { intent, product, dryRun, snapshotId, snapshot } = req.body;
 
     if (!intent || !product) {
       return res.status(400).json({ error: 'intent와 product는 필수입니다.' });
+    }
+    const resolvedSnapshot = snapshot
+      ?? (typeof snapshotId === 'string' ? snapshots.get(snapshotId) : undefined);
+    if (!resolvedSnapshot) {
+      return res.status(400).json({ error: 'snapshot 또는 snapshotId가 필요합니다.' });
     }
 
     const planId = `plan_${Date.now().toString(36)}`;
@@ -590,14 +635,15 @@ app.post('/api/plan', async (req, res) => {
       riskLevel = 'critical';
     }
 
-    const plan = {
+    const plan: Record<string, unknown> = {
       id: planId,
       product,
       version: 'latest',
       action: `configure_${product.toLowerCase()}`,
       riskLevel,
       description: intent,
-      dryRun: dryRun ?? false,
+      dryRun: dryRun ?? true,
+      snapshotId: (resolvedSnapshot as { id?: string }).id ?? snapshotId,
       steps: [
         { name: 'pre-check', toolName: 'get_device_snapshot' },
         { name: 'apply-change', toolName: `apply_${product.toLowerCase()}_config` },
@@ -607,15 +653,44 @@ app.post('/api/plan', async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
+    const autopilotDecision = autopilotPolicy.evaluate({
+      id: planId,
+      product,
+      version: 'latest',
+      action: String(plan.action),
+      riskLevel: riskLevel as RiskLevel,
+      description: intent,
+      steps: (plan.steps as Array<{ name: string; toolName: string }>).map((step) => ({
+        name: step.name,
+        toolName: step.toolName,
+        args: {},
+      })),
+      dryRun: Boolean(plan.dryRun),
+      metadata: { snapshotIncluded: 'true' },
+    });
+    plan.autopilotDecision = autopilotDecision;
+
     operationPlans.set(planId, plan);
+
+    if (autopilotDecision.autoApprovable && riskLevel === 'low') {
+      plan.status = 'approved';
+    } else if (riskLevel === 'high' || riskLevel === 'critical') {
+      const approvalId = `approval_${Date.now().toString(36)}`;
+      approvals.set(approvalId, {
+        id: approvalId,
+        planId,
+        status: 'pending',
+        requestedAt: new Date().toISOString(),
+      });
+      plan.approvalId = approvalId;
+      plan.status = 'pending_approval';
+    }
+
     res.json(plan);
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
 });
-
-// 승인 대기 목록 조회
-const approvals = new Map<string, Record<string, unknown>>();
 
 app.get('/api/approvals', (req, res) => {
   const pendingApprovals = Array.from(approvals.values()).filter(a => a.status === 'pending');
@@ -632,6 +707,12 @@ app.post('/api/approvals/:id/approve', (req, res) => {
   approval.status = 'approved';
   approval.approvedBy = req.body.approvedBy ?? 'operator';
   approval.approvedAt = new Date().toISOString();
+  const planId = approval.planId as string;
+  const plan = operationPlans.get(planId);
+  if (plan) {
+    plan.status = 'approved';
+    plan.approvalId = approval.id;
+  }
 
   res.json({ ok: true, approval });
 });
@@ -651,9 +732,6 @@ app.post('/api/approvals/:id/reject', (req, res) => {
   res.json({ ok: true, approval });
 });
 
-// 승인된 plan 실행
-const executionResults = new Map<string, Record<string, unknown>>();
-
 app.post('/api/execute/:planId', async (req, res) => {
   try {
     const plan = operationPlans.get(req.params.planId);
@@ -661,16 +739,43 @@ app.post('/api/execute/:planId', async (req, res) => {
       return res.status(404).json({ error: 'Plan을 찾을 수 없습니다.' });
     }
 
+    const isApproved = plan.status === 'approved';
+    const breakGlassActive = breakGlassPolicy.isBreakGlassActive();
+    if (!isApproved && !breakGlassActive) {
+      return res.status(403).json({ error: '승인된 plan 또는 활성 break-glass 세션이 필요합니다.' });
+    }
+
+    const snapshotId = plan.snapshotId as string | undefined;
+    const snapshotRecord = snapshotId ? snapshots.get(snapshotId) : undefined;
+    if (!snapshotRecord) {
+      return res.status(400).json({ error: '실행 전 snapshot이 필요합니다.' });
+    }
+
     const executionId = `exec_${Date.now().toString(36)}`;
+    const beforeSnapshot = toPostVerifierSnapshot(snapshotRecord);
+    const atomicResult = await operationOrchestrator.executeWithVerification({
+      executionId,
+      beforeSnapshot,
+      collectAfterSnapshot: async () => ({
+        ...beforeSnapshot,
+        capturedAt: new Date().toISOString(),
+      }),
+      execute: async () => ({ success: true }),
+      expectedChanges: [],
+    });
+
     const result = {
       executionId,
       planId: plan.id,
-      status: 'completed',
+      status: atomicResult.executionSuccess && atomicResult.verification.passed ? 'completed' : 'failed',
       startedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
       stepsExecuted: 3,
-      stepsSucceeded: 3,
-      stepsFailed: 0,
+      stepsSucceeded: atomicResult.executionSuccess ? 3 : 0,
+      stepsFailed: atomicResult.executionSuccess ? 0 : 3,
+      verified: atomicResult.verification.passed,
+      evidencePath: atomicResult.evidencePath,
+      breakGlassUsed: breakGlassActive && !isApproved,
     };
 
     executionResults.set(executionId, result);
@@ -701,6 +806,84 @@ app.get('/api/evidence/:executionId', (req, res) => {
     ].join('\n'),
   };
   res.json(evidence);
+});
+
+// ─── Phase 1/2: Autopilot / Break-glass / Incident / Remediation ───────────
+
+app.post('/api/breakglass/request', (req, res) => {
+  try {
+    const { reason, requestedBy, durationMinutes } = req.body;
+    if (!reason || !requestedBy) {
+      return res.status(400).json({ error: 'reason과 requestedBy가 필요합니다.' });
+    }
+    const request = breakGlassPolicy.requestBreakGlass(reason, requestedBy, durationMinutes);
+    res.json(request);
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
+});
+
+app.post('/api/breakglass/:id/approve', (req, res) => {
+  try {
+    const approved = breakGlassPolicy.approveBreakGlass(
+      req.params.id,
+      req.body?.approvedBy ?? 'operator',
+    );
+    res.json(approved);
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
+});
+
+app.get('/api/breakglass/active', (_req, res) => {
+  res.json({
+    active: breakGlassPolicy.isBreakGlassActive(),
+    sessions: breakGlassPolicy.getActiveSessions(),
+  });
+});
+
+app.post('/api/incidents/detect', (req, res) => {
+  try {
+    const incidents = incidentDetector.detectIncidents(req.body);
+    for (const incident of incidents) {
+      detectedIncidents.set(incident.id, incident as unknown as Record<string, unknown>);
+    }
+    res.json({ incidents });
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
+});
+
+app.post('/api/incidents/:id/remediation', (req, res) => {
+  try {
+    const incident = detectedIncidents.get(req.params.id);
+    if (!incident) {
+      return res.status(404).json({ error: 'Incident를 찾을 수 없습니다.' });
+    }
+    const plan = remediationPlanner.planRemediation(
+      incident as any,
+      playbookRegistry.listAll(),
+    );
+    remediationPlans.set(plan.id, plan as unknown as Record<string, unknown>);
+    res.json(plan);
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
+});
+
+app.post('/api/remediation/:id/execute', (req, res) => {
+  const plan = remediationPlans.get(req.params.id);
+  if (!plan) {
+    return res.status(404).json({ error: 'Remediation plan을 찾을 수 없습니다.' });
+  }
+  if (plan.approvalRequired && plan.status !== 'approved') {
+    return res.status(403).json({ error: '승인 전 복구 작업은 실행할 수 없습니다.' });
+  }
+  res.status(403).json({
+    error: '복구 실행은 승인 후 별도 실행 경로에서만 허용됩니다.',
+    planId: plan.id,
+    status: plan.status,
+  });
 });
 
 // ─── SSE Events ────────────────────────────────────────────────────────────

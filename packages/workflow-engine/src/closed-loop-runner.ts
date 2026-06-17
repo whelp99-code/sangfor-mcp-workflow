@@ -23,6 +23,8 @@ import { WorkflowExecutor } from './workflow-executor.js';
 import { ApprovalManager } from './approval-manager.js';
 import { ReplanStrategy } from './replan-strategy.js';
 import type { FailureContext, ReplanFailureCategory } from './replan-strategy.js';
+import { OperationOrchestrator } from './operation-orchestrator.js';
+import type { PostVerifierSnapshot } from './device-verifier.js';
 
 const log = createLogger('closed-loop-runner');
 
@@ -70,6 +72,13 @@ interface ReplanHistoryEntry {
 
 const DEFAULT_MAX_RETRIES = 3;
 
+export interface ClosedLoopExecutionOptions {
+  maxRetries?: number;
+  beforeSnapshot?: PostVerifierSnapshot;
+  collectAfterSnapshot?: () => Promise<PostVerifierSnapshot>;
+  operationOrchestrator?: OperationOrchestrator;
+}
+
 export class ClosedLoopRunner {
   private replanStrategy: ReplanStrategy;
   private approvalManager: ApprovalManager | null;
@@ -90,8 +99,13 @@ export class ClosedLoopRunner {
   async executeWithRetry(
     plan: OperationPlan,
     executor: WorkflowExecutor,
-    maxRetries: number = DEFAULT_MAX_RETRIES
+    maxRetriesOrOptions: number | ClosedLoopExecutionOptions = DEFAULT_MAX_RETRIES
   ): Promise<ClosedLoopResult> {
+    const options: ClosedLoopExecutionOptions =
+      typeof maxRetriesOrOptions === 'number'
+        ? { maxRetries: maxRetriesOrOptions }
+        : maxRetriesOrOptions;
+    const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     log.info(
       `Closed-loop execution started: plan=${plan.id}, maxRetries=${maxRetries}`
     );
@@ -113,7 +127,7 @@ export class ClosedLoopRunner {
       );
 
       // plan 실행
-      const executionResult = await this.executePlan(currentPlan, executor);
+      const executionResult = await this.executePlan(currentPlan, executor, options);
 
       const completedAt = nowISO();
       const duration =
@@ -270,15 +284,58 @@ export class ClosedLoopRunner {
    */
   private async executePlan(
     plan: OperationPlan,
-    executor: WorkflowExecutor
+    executor: WorkflowExecutor,
+    options: ClosedLoopExecutionOptions = {},
   ): Promise<{ success: boolean; failedStepId?: string; error?: string }> {
     try {
-      // postcheck 검증
       if (plan.postchecks.length === 0) {
         log.warn(`Plan ${plan.id} has no postchecks — skipping post-validation`);
       }
 
-      // OperationPlan → Workflow 변환 후 실행
+      const orchestrator = options.operationOrchestrator;
+      const beforeSnapshot = options.beforeSnapshot;
+      const collectAfterSnapshot = options.collectAfterSnapshot;
+
+      if (orchestrator && beforeSnapshot && collectAfterSnapshot) {
+        const atomicResult = await orchestrator.executeWithVerification({
+          executionId: `${plan.id}_attempt_${nowId('attempt')}`,
+          beforeSnapshot,
+          collectAfterSnapshot,
+          execute: async () => {
+            const workflow = this.convertPlanToWorkflow(plan);
+            const result = await executor.executeWorkflow(workflow);
+            if (result.status === 'completed') {
+              return { success: true };
+            }
+            const failedEntry = result.errors[0];
+            return {
+              success: false,
+              error: failedEntry?.error ?? 'Workflow execution failed',
+            };
+          },
+          expectedChanges: plan.postchecks.map((check) => ({
+            section: plan.intent.target,
+            key: check.id,
+            expectedValue: String(check.expected),
+            description: check.description,
+            critical: true,
+          })),
+        });
+
+        if (atomicResult.executionSuccess && atomicResult.verification.passed) {
+          return { success: true };
+        }
+
+        return {
+          success: false,
+          failedStepId: plan.steps[0]?.id,
+          error:
+            atomicResult.executionError ??
+            atomicResult.verification.failed[0]?.description ??
+            'Post-execution verification failed',
+        };
+      }
+
       const workflow = this.convertPlanToWorkflow(plan);
       const result = await executor.executeWorkflow(workflow);
 

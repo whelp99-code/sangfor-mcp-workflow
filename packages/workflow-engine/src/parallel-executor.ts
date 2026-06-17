@@ -8,6 +8,7 @@ import type {
   WorkflowStep,
   WorkflowExecutionResult,
   ExecutionLog,
+  RiskLevel,
 } from './types.js';
 import { ToolRegistry } from './tool-registry.js';
 import { ExecutionLogger } from './execution-logger.js';
@@ -129,6 +130,7 @@ export class ParallelExecutor {
     const results: Map<string, any> = new Map();
     const executionLogs: ExecutionLog[] = [];
     const errors: Array<{ stepId: string; error: string }> = [];
+    const retryCounts = new Map<string, number>();
 
     let stepsExecuted = 0;
     let stepsSucceeded = 0;
@@ -204,6 +206,7 @@ export class ParallelExecutor {
         // tool 실행 (타임아웃 적용)
         const tool = this.toolRegistry.getTool(step.toolName);
         if (!tool) throw new Error(`Tool not found: ${step.toolName}`);
+        this.assertStepAllowed(workflow, step, tool.riskLevel, tool.requiresApproval);
 
         const result = await this.executeWithTimeout(
           tool.handler(injectedArgs),
@@ -234,9 +237,12 @@ export class ParallelExecutor {
         // 에러 처리
         const errorDecision = await this.errorHandler.handleError(step, error);
         const errorMessage = error instanceof Error ? error.message : String(error);
+        const retryCount = retryCounts.get(step.id) ?? 0;
 
-        if (errorDecision.action === 'retry' && step.retryPolicy.maxRetries > logEntry.retryCount) {
-          logEntry.retryCount++;
+        if (errorDecision.action === 'retry' && retryCount < step.retryPolicy.maxRetries) {
+          const nextRetryCount = retryCount + 1;
+          retryCounts.set(step.id, nextRetryCount);
+          logEntry.retryCount = nextRetryCount;
           step.status = 'pending';
           stepsExecuted--;
           running.delete(step.toolName);
@@ -348,6 +354,24 @@ export class ParallelExecutor {
   // 지연 함수
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private assertStepAllowed(
+    workflow: Workflow,
+    step: WorkflowStep,
+    riskLevel: RiskLevel,
+    requiresApproval: boolean,
+  ): void {
+    const isMutationStep = /apply|create|update|delete|remove|restart|reboot|write|configure/i.test(
+      step.toolName,
+    );
+    const isHighRisk = riskLevel === 'high' || riskLevel === 'critical';
+    if (!requiresApproval && !isHighRisk && !isMutationStep) {
+      return;
+    }
+    if (workflow.status !== 'approved') {
+      throw new Error(`Execution blocked: workflow ${workflow.id} is not approved for ${step.toolName}`);
+    }
   }
 
   // 캐시 통계 조회

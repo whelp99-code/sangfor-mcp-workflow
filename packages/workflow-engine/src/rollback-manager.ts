@@ -51,6 +51,11 @@ export interface RollbackResult {
   completedAt: string;
   duration: number;
   error?: string;
+  mode: 'dry-run' | 'execute';
+}
+
+export interface RollbackExecutionOptions {
+  mode?: 'dry-run' | 'execute';
 }
 
 // ─── Rollback Manager ──────────────────────────────────────────────────────
@@ -58,6 +63,15 @@ export interface RollbackResult {
 export class RollbackManager {
 
   private rollbackHistory: Map<string, RollbackResult> = new Map();
+  private rollbackStepExecutor: ((
+    step: RemediationStep,
+  ) => Promise<{ success: boolean; output: string; error?: string }>) | null = null;
+
+  setRollbackStepExecutor(
+    executor: (step: RemediationStep) => Promise<{ success: boolean; output: string; error?: string }>,
+  ): void {
+    this.rollbackStepExecutor = executor;
+  }
 
   /**
    * 롤백 계획 검증
@@ -149,9 +163,11 @@ export class RollbackManager {
   async executeRollback(
     plan: RemediationPlan,
     snapshot: EngineDeviceSnapshot | ModelDeviceSnapshot | null,
+    options: RollbackExecutionOptions = {},
   ): Promise<RollbackResult> {
     const rollbackId = nowId('rollback');
     const startedAt = nowISO();
+    const mode = options.mode ?? 'dry-run';
 
     log.info(`Executing rollback: ${rollbackId} for plan: ${plan.id}`);
 
@@ -172,6 +188,7 @@ export class RollbackManager {
         completedAt: nowISO(),
         duration: 0,
         error: errorMsg,
+        mode,
       };
       this.rollbackHistory.set(rollbackId, result);
       return result;
@@ -193,7 +210,7 @@ export class RollbackManager {
 
     // 롤백 단계 순차 실행
     for (const step of plan.rollback.steps) {
-      const stepResult = await this.executeRollbackStep(step);
+      const stepResult = await this.executeRollbackStep(step, mode);
       steps.push(stepResult);
 
       // step log evidence
@@ -243,6 +260,7 @@ export class RollbackManager {
       completedAt,
       duration,
       error: allSuccess ? undefined : '일부 롤백 단계가 실패했습니다.',
+      mode,
     };
 
     this.rollbackHistory.set(rollbackId, result);
@@ -274,24 +292,48 @@ export class RollbackManager {
   /**
    * 단일 롤백 단계 실행 (시뮬레이션)
    */
-  private async executeRollbackStep(step: RemediationStep): Promise<RollbackStepResult> {
+  private async executeRollbackStep(
+    step: RemediationStep,
+    mode: 'dry-run' | 'execute',
+  ): Promise<RollbackStepResult> {
     const startTime = Date.now();
 
     log.info(`Executing rollback step: ${step.id} — ${step.title}`);
 
-    // 실제 환경에서는 adapter를 통해 장비에 롤백 명령 실행
-    // 여기서는 시뮬레이션 결과를 반환
-    try {
-      // 시뮬레이션: dryRunSafe한 action은 성공, 아닌 경우도 성공으로 처리
-      const output = `롤백 완료: ${step.title} (${step.action})`;
-
+    if (mode === 'dry-run') {
       return {
         stepId: step.id,
         title: step.title,
         success: true,
         executedAt: nowISO(),
         duration: Date.now() - startTime,
-        output,
+        output: `[SIMULATED] 롤백 예정: ${step.title} (${step.action})`,
+      };
+    }
+
+    if (!this.rollbackStepExecutor) {
+      return {
+        stepId: step.id,
+        title: step.title,
+        success: false,
+        executedAt: nowISO(),
+        duration: Date.now() - startTime,
+        output: '',
+        error: 'Rollback executor is not configured for execute mode',
+      };
+    }
+
+    try {
+      const execution = await this.rollbackStepExecutor(step);
+
+      return {
+        stepId: step.id,
+        title: step.title,
+        success: execution.success,
+        executedAt: nowISO(),
+        duration: Date.now() - startTime,
+        output: execution.output,
+        error: execution.error,
       };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);

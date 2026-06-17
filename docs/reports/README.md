@@ -33,8 +33,11 @@ Sangfor MCP Workflow Engine 보고서 및 분석 결과 저장소.
 - **목적**: 복구 계획 검증 및 롤백 실행
 - **핵심 메서드**:
   - `validateRollbackPlan(plan)` → `RollbackValidationResult`
-  - `executeRollback(plan, snapshot)` → `RollbackResult`
+  - `executeRollback(plan, snapshot, { mode })` → `RollbackResult`
   - `getRollbackHistory()` → `RollbackResult[]`
+- **실행 모드 구분**:
+  - `mode: "dry-run"`: 시뮬레이션, 실제 변경 없음 (evidence에 `SIMULATED` 표기)
+  - `mode: "execute"`: 실제 롤백 executor 필요, 미설정 시 실패 반환
 - **검증 항목**:
   - Rollback steps 존재 여부
   - 필수 필드 (id, title, action) 확인
@@ -87,3 +90,10 @@ RollbackManager.executeRollback(plan, snapshot)
     ▼
 RollbackResult (success, evidence)
 ```
+
+## 운영 표기 규칙
+
+- `dry-run`: 계획/검증만 수행, 장비 변경 없음.
+- `real-run`: 승인된 실행 컨텍스트에서만 실제 변경 수행.
+- `rollback-simulated`: 롤백 dry-run 결과.
+- `rollback-executed`: 롤백 execute 결과(실 adapter 성공/실패 포함).

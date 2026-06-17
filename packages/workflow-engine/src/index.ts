@@ -47,6 +47,7 @@ export * from './scenario-db.js';
 export * from './sangfor-api-discovery.js';
 export * from './manual-scenario-extractor.js';
 export * from './device-verifier.js';
+export * from './operation-orchestrator.js';
 export * from './sangfor-intelligence.js';
 export * from './operation-planner.js';
 export { AutopilotPolicy, createDefaultAutopilotPolicy, type PolicyRule, type PolicyCondition, type AutopilotDecision, type PolicyChangeRecord } from './autopilot-policy.js';

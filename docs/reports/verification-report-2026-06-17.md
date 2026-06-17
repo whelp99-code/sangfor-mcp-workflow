@@ -302,7 +302,7 @@ approval-manager.ts, device-verifier.ts, execution-logger.ts, workflow-executor.
 
 - **총 변경**: 41 files, +7,953 lines
 - **커밋**: `e96b3c2` (main)
-- **테스트**: 44/44 통과
+- **테스트**: 53/53 통과
 - **빌드**: 에러 0
 
 ---
@@ -324,3 +324,19 @@ approval-manager.ts, device-verifier.ts, execution-logger.ts, workflow-executor.
 8. LLM 응답 런타임 검증 (zod)
 9. Break-glass 정책 실행 경로 통합
 10. Evidence 무결성 서명
+
+---
+
+## 7. 후속 조치 상태 (2026-06-17 업데이트)
+
+| 항목 | 상태 | 조치 |
+|------|------|------|
+| WorkflowExecutor 재시도 무한루프 | Fixed | step별 retry 카운트를 분리 저장해 `maxRetries` 도달 시 실패 확정 |
+| 승인 없는 변경 실행 경로 | Fixed | `WorkflowExecutor`에 민감 step 실행 전 `assertExecutionAllowed` 강제 |
+| MCP tool 기본 approval=false | Fixed | MCP 자동 등록 시 mutation/unknown tool을 기본 승인 필요로 분류 |
+| dry-run 로직 역전 | Fixed | `dryRun`을 승인 여부와 분리, 기본 `true`, 명시적 승인 컨텍스트 필요 |
+| Rollback 항상 성공 시뮬레이션 | Fixed | rollback 실행 모드를 `dry-run`/`execute`로 분리, executor 미설정 시 execute 실패 처리 |
+| CDP 연결 누수 (applyConfig/DeviceVerifier) | Fixed | 단일 실행 경로 `finally close` 및 verifier 연결 수명주기 정리 |
+| API 실행 경로 승인 강제 (Operator/MCP) | Fixed | plan 생성 시 snapshot 필수, execute 시 approval/break-glass 검증, `OperationOrchestrator` 원자 실행 연동 |
+| Break-glass 실행 경로 통합 | Fixed | Operator/MCP execute 경로에서 활성 break-glass 세션 허용, `WorkflowExecutor` 연동 |
+| Snapshot race/원자적 postcheck 루프 | Fixed | `OperationOrchestrator` + `ClosedLoopRunner` 옵션으로 before→execute→after→verify 루프 지원 |

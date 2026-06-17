@@ -340,4 +340,20 @@ export class ApprovalManager {
     }
     return cleaned;
   }
+
+  isOperationApproved(operationId: string): boolean {
+    const request = this.operationApprovals.get(operationId);
+    return request?.status === 'approved';
+  }
+
+  assertOperationExecutionAllowed(plan: OperationPlan): void {
+    const needsApproval = plan.risk.level === 'high'
+      || plan.risk.level === 'critical'
+      || plan.risk.categories.includes('config_change')
+      || plan.risk.categories.includes('service_impact');
+    if (!needsApproval) return;
+    if (!this.isOperationApproved(plan.id)) {
+      throw new Error(`Operation ${plan.id} requires approval before execution`);
+    }
+  }
 }
