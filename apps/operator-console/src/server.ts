@@ -623,6 +623,11 @@ app.post('/api/plan', async (req, res) => {
       return res.status(400).json({ error: 'snapshot 또는 snapshotId가 필요합니다.' });
     }
 
+    const resolvedSnapshotId = (resolvedSnapshot as { id?: string }).id ?? snapshotId;
+    if (resolvedSnapshotId) {
+      snapshots.set(resolvedSnapshotId, resolvedSnapshot as Record<string, unknown>);
+    }
+
     const planId = `plan_${Date.now().toString(36)}`;
     const intentLower = intent.toLowerCase();
 
@@ -643,7 +648,7 @@ app.post('/api/plan', async (req, res) => {
       riskLevel,
       description: intent,
       dryRun: dryRun ?? true,
-      snapshotId: (resolvedSnapshot as { id?: string }).id ?? snapshotId,
+      snapshotId: resolvedSnapshotId,
       steps: [
         { name: 'pre-check', toolName: 'get_device_snapshot' },
         { name: 'apply-change', toolName: `apply_${product.toLowerCase()}_config` },
