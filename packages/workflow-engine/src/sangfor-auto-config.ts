@@ -13,6 +13,13 @@ import { chromium, type Page, type Browser, type ElementHandle } from 'playwrigh
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { nowId, nowISO, createLogger } from '@sangfor/workflow-shared';
+import type {
+  AdapterBoundary,
+  UIActionConstraint,
+  OperationStep,
+  StepResult,
+} from './types.js';
+import type { DeviceCredentials } from './device-verifier.js';
 
 const log = createLogger('sangfor-auto-config');
 
@@ -60,11 +67,6 @@ export interface VerificationResult {
   screenshotPath?: string;
 }
 
-export interface DeviceCredentials {
-  username: string;
-  password: string;
-  targetUrl: string;
-}
 
 // ─── 제품별 설정 시나리오 ────────────────────────────────────────────────────
 
@@ -531,6 +533,195 @@ export class SangforAutoConfig {
     }
     this.browser = null;
     this.currentPage = null;
+  }
+
+  // ─── PR-25: Adapter Boundary 실행 ────────────────────────────────────────
+
+  /**
+   * AdapterBoundary를 적용하여 step 실행
+   * - UI adapter: selector 필수 검증, idempotency 확인
+   * - dry-run 기본값 적용
+   */
+  async executeWithBoundary(
+    step: OperationStep,
+    boundary: AdapterBoundary,
+    credentials?: DeviceCredentials,
+  ): Promise<StepResult> {
+    const startTime = Date.now();
+
+    // boundary 제약 검증
+    if (boundary.adapterType === 'ui' && boundary.constraints.selectorRequired) {
+      const hasSelector = step.input['selector'] !== undefined
+        && step.input['selector'] !== null
+        && String(step.input['selector']).length > 0;
+      if (!hasSelector) {
+        return {
+          stepId: step.id,
+          success: false,
+          output: {},
+          errors: ['UI adapter requires selector but none provided'],
+          duration: Date.now() - startTime,
+          dryRun: false,
+        };
+      }
+    }
+
+    // 지원되는 action인지 확인
+    if (boundary.supportedActions.length > 0) {
+      const actionType = String(step.input['actionType'] ?? step.action);
+      if (!boundary.supportedActions.includes(actionType)) {
+        return {
+          stepId: step.id,
+          success: false,
+          output: {},
+          errors: [`Action not supported by adapter: ${actionType} (supported: ${boundary.supportedActions.join(', ')})`],
+          duration: Date.now() - startTime,
+          dryRun: false,
+        };
+      }
+    }
+
+    // dry-run 기본값 적용
+    const isDryRun = step.input['dryRun'] === true || !step.requiresApproval;
+
+    if (isDryRun) {
+      log.info(`[DRY-RUN] Step ${step.id}: ${step.title} — 실행 생략`);
+      return {
+        stepId: step.id,
+        success: true,
+        output: { dryRun: true, simulated: step.capability },
+        errors: [],
+        duration: Date.now() - startTime,
+        dryRun: true,
+      };
+    }
+
+    // 실제 실행
+    try {
+      if (boundary.adapterType === 'ui' && credentials) {
+        const result = await this.executeConfigStep(step, credentials, false);
+        return {
+          stepId: step.id,
+          success: result.success,
+          output: result.appliedSettings as Record<string, unknown>,
+          errors: result.errors,
+          duration: result.duration,
+          dryRun: false,
+        };
+      }
+
+      // api, ssh 등 다른 adapter 타입은 현재 UI 방식으로 fallback
+      log.warn(`Adapter 타입 '${boundary.adapterType}' 미구현 — UI adapter로 fallback`);
+      if (credentials) {
+        const result = await this.executeConfigStep(step, credentials, false);
+        return {
+          stepId: step.id,
+          success: result.success,
+          output: result.appliedSettings as Record<string, unknown>,
+          errors: result.errors,
+          duration: result.duration,
+          dryRun: false,
+        };
+      }
+
+      return {
+        stepId: step.id,
+        success: false,
+        output: {},
+        errors: ['Credentials required for execution'],
+        duration: Date.now() - startTime,
+        dryRun: false,
+      };
+    } catch (err) {
+      return {
+        stepId: step.id,
+        success: false,
+        output: {},
+        errors: [`Execution error: ${String(err)}`],
+        duration: Date.now() - startTime,
+        dryRun: false,
+      };
+    }
+  }
+
+  /**
+   * OperationStep을 기반으로 설정 실행 (dryRun 파라미터 지원)
+   * 저장 버튼은 성공한 변경이 있을 때만 수행
+   */
+  async executeConfigStep(
+    step: OperationStep,
+    credentials: DeviceCredentials,
+    dryRun: boolean = true,
+  ): Promise<ConfigResult> {
+    const startTime = Date.now();
+    const screenshots: string[] = [];
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const appliedSettings: Record<string, unknown> = {};
+
+    if (dryRun) {
+      log.info(`[DRY-RUN] ConfigStep ${step.id}: ${step.title} — 설정 변경 생략`);
+      return {
+        success: true,
+        appliedSettings: { dryRun: true, stepName: step.title },
+        screenshots: [],
+        errors: [],
+        warnings: ['dry-run 모드 — 실제 변경 없음'],
+        duration: Date.now() - startTime,
+      };
+    }
+
+    let page: Page | null = null;
+    try {
+      page = await this.connectToDevice(credentials.targetUrl);
+
+      const hasLoginForm = await this.hasInteractiveLoginForm(page);
+      if (hasLoginForm) {
+        await this.login(page, credentials);
+      }
+
+      // 해시 라우팅이 있으면 이동
+      const hashRoute = step.input['hashRoute'] as string | undefined;
+      if (hashRoute) {
+        await this.navigateToHash(page, hashRoute);
+      }
+
+      // 설정 액션 실행
+      const actions = step.input['actions'] as unknown as SettingAction[] | undefined;
+      if (actions && Array.isArray(actions)) {
+        for (const action of actions) {
+          try {
+            await this.executeSettingAction(page, action);
+            appliedSettings[action.label] = action.value;
+            log.info(`  ✅ ${action.label} = ${action.value}`);
+          } catch (err) {
+            const errorMsg = `설정 실패 [${action.label}]: ${String(err)}`;
+            errors.push(errorMsg);
+            log.error(errorMsg);
+          }
+        }
+      }
+
+      // 저장 버튼은 성공한 변경이 있을 때만 수행
+      if (Object.keys(appliedSettings).length > 0) {
+        await this.clickSaveButton(page);
+        await page.waitForTimeout(3000);
+        screenshots.push(await this.captureScreenshot(page, 'after_save'));
+      } else {
+        log.info('적용된 설정 없음 — 저장 버튼 클릭 생략');
+      }
+    } catch (err) {
+      errors.push(`실행 오류: ${String(err)}`);
+    }
+
+    return {
+      success: errors.length === 0,
+      appliedSettings,
+      screenshots,
+      errors,
+      warnings,
+      duration: Date.now() - startTime,
+    };
   }
 
   // ─── 내부 헬퍼 ────────────────────────────────────────────────────────────

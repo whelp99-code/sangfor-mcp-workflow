@@ -530,6 +530,179 @@ app.get('/api/access/requests', (req, res) => {
   res.json(requests);
 });
 
+// ─── Phase 0: Operation Management API (PR-27) ─────────────────────────────
+
+// 장비 스냅샷 조회 (read-only)
+app.get('/api/snapshots/:product', async (req, res) => {
+  try {
+    const { product } = req.params;
+    const snapshot = {
+      id: `snap_${Date.now().toString(36)}`,
+      product,
+      version: 'latest',
+      capturedAt: new Date().toISOString(),
+      targetUrl: `https://10.80.1.${product === 'EPP' ? '106' : product === 'IAG' ? '107' : '108'}`,
+      sections: {
+        general: {
+          title: '일반 설정',
+          items: {
+            hostname: `${product.toLowerCase()}-console`,
+            firmwareVersion: '5.0.0',
+            uptime: '45 days',
+          },
+        },
+        policy: {
+          title: '보안 정책',
+          items: {
+            firewallEnabled: 'true',
+            ipsEnabled: 'true',
+            antivirusEnabled: 'true',
+          },
+        },
+      },
+    };
+    res.json(snapshot);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Operation Plan 생성
+const operationPlans = new Map<string, Record<string, unknown>>();
+
+app.post('/api/plan', async (req, res) => {
+  try {
+    const { intent, product, dryRun } = req.body;
+
+    if (!intent || !product) {
+      return res.status(400).json({ error: 'intent와 product는 필수입니다.' });
+    }
+
+    const planId = `plan_${Date.now().toString(36)}`;
+    const intentLower = intent.toLowerCase();
+
+    let riskLevel: string = 'medium';
+    if (intentLower.includes('조회') || intentLower.includes('확인')) {
+      riskLevel = 'low';
+    } else if (intentLower.includes('삭제') || intentLower.includes('재시작')) {
+      riskLevel = 'high';
+    } else if (intentLower.includes('인증') || intentLower.includes('서버변경')) {
+      riskLevel = 'critical';
+    }
+
+    const plan = {
+      id: planId,
+      product,
+      version: 'latest',
+      action: `configure_${product.toLowerCase()}`,
+      riskLevel,
+      description: intent,
+      dryRun: dryRun ?? false,
+      steps: [
+        { name: 'pre-check', toolName: 'get_device_snapshot' },
+        { name: 'apply-change', toolName: `apply_${product.toLowerCase()}_config` },
+        { name: 'post-check', toolName: 'verify_configuration' },
+      ],
+      status: 'draft',
+      createdAt: new Date().toISOString(),
+    };
+
+    operationPlans.set(planId, plan);
+    res.json(plan);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// 승인 대기 목록 조회
+const approvals = new Map<string, Record<string, unknown>>();
+
+app.get('/api/approvals', (req, res) => {
+  const pendingApprovals = Array.from(approvals.values()).filter(a => a.status === 'pending');
+  res.json(pendingApprovals);
+});
+
+// 승인 처리
+app.post('/api/approvals/:id/approve', (req, res) => {
+  const approval = approvals.get(req.params.id);
+  if (!approval) {
+    return res.status(404).json({ error: '승인 요청을 찾을 수 없습니다.' });
+  }
+
+  approval.status = 'approved';
+  approval.approvedBy = req.body.approvedBy ?? 'operator';
+  approval.approvedAt = new Date().toISOString();
+
+  res.json({ ok: true, approval });
+});
+
+// 거절 처리
+app.post('/api/approvals/:id/reject', (req, res) => {
+  const approval = approvals.get(req.params.id);
+  if (!approval) {
+    return res.status(404).json({ error: '승인 요청을 찾을 수 없습니다.' });
+  }
+
+  approval.status = 'rejected';
+  approval.rejectedBy = req.body.rejectedBy ?? 'operator';
+  approval.rejectedAt = new Date().toISOString();
+  approval.rejectionReason = req.body.reason ?? '';
+
+  res.json({ ok: true, approval });
+});
+
+// 승인된 plan 실행
+const executionResults = new Map<string, Record<string, unknown>>();
+
+app.post('/api/execute/:planId', async (req, res) => {
+  try {
+    const plan = operationPlans.get(req.params.planId);
+    if (!plan) {
+      return res.status(404).json({ error: 'Plan을 찾을 수 없습니다.' });
+    }
+
+    const executionId = `exec_${Date.now().toString(36)}`;
+    const result = {
+      executionId,
+      planId: plan.id,
+      status: 'completed',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      stepsExecuted: 3,
+      stepsSucceeded: 3,
+      stepsFailed: 0,
+    };
+
+    executionResults.set(executionId, result);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+// Evidence 보고서 조회
+app.get('/api/evidence/:executionId', (req, res) => {
+  const now = new Date().toISOString();
+  const evidence = {
+    executionId: req.params.executionId,
+    generatedAt: now,
+    evidenceMarkdown: [
+      '# 실행 Evidence 보고서',
+      '',
+      '## 기본 정보',
+      '',
+      `| 항목 | 값 |`,
+      `|------|-----|`,
+      `| 실행 ID | \`${req.params.executionId}\` |`,
+      `| 생성 시간 | ${now} |`,
+      '',
+      '---',
+      `*자동 생성 (${now})*`,
+    ].join('\n'),
+  };
+  res.json(evidence);
+});
+
 // ─── SSE Events ────────────────────────────────────────────────────────────
 
 app.get('/api/events', (req, res) => {

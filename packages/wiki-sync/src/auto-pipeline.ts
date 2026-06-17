@@ -9,6 +9,7 @@ import type {
   WikiUpdateProposal,
 } from '@sangfor/workflow-core';
 import { applyWikiUpdateToObsidian } from './obsidian-sync.js';
+import { createObsidianNote, createLessonNote } from './obsidian-sync.js';
 import { applyWikiUpdateToGitHub, type GitHubWikiConfig } from './github-wiki-sync.js';
 
 const log = createLogger('auto-wiki-pipeline');
@@ -231,4 +232,132 @@ export function getAutoWikiPipelineStatus(): PipelineStatus {
     totalProposals: 0,
     totalUpdates: 0,
   };
+}
+
+// ─── Evidence Wiki 동기화 (PR-26) ───────────────────────────────────────────
+
+const evidenceSyncCandidates: Array<{
+  evidencePath: string;
+  registeredAt: string;
+  status: 'pending' | 'synced' | 'failed';
+}> = [];
+
+/**
+ * Evidence 파일을 wiki sync 후보로 등록
+ * 다음 runAutoWikiPipeline 호출 시 해당 evidence를 wiki에 반영
+ */
+export function registerEvidenceForSync(evidencePath: string): void {
+  evidenceSyncCandidates.push({
+    evidencePath,
+    registeredAt: nowISO(),
+    status: 'pending',
+  });
+  log.info(`Evidence wiki sync 후보 등록: ${evidencePath}`);
+}
+
+/**
+ * 등록된 evidence sync 후보 목록을 반환
+ */
+export function getEvidenceSyncCandidates(): Array<{
+  evidencePath: string;
+  registeredAt: string;
+  status: 'pending' | 'synced' | 'failed';
+}> {
+  return [...evidenceSyncCandidates];
+}
+
+// ─── PR-30: Drift Report + Lesson 동기화 ──────────────────────────────────
+
+export interface DriftReportForSync {
+  id: string;
+  deviceId: string;
+  product: string;
+  drifts: Array<{
+    field: string;
+    desiredValue: string | number | boolean | null;
+    currentValue: string | number | boolean | null;
+    severity: 'info' | 'warning' | 'critical';
+    category: string;
+  }>;
+  severity: 'info' | 'warning' | 'critical';
+  summary: string;
+}
+
+export interface LessonDocumentForSync {
+  id: string;
+  title: string;
+  product: string;
+  severity: string;
+  background: string;
+  lessonText: string;
+  application: string;
+  sourceFailureId: string;
+}
+
+/**
+ * Drift Report를 Obsidian에 동기화
+ */
+export function syncDriftReport(
+  report: DriftReportForSync,
+  vaultPath?: string,
+): void {
+  log.info(`Syncing drift report: ${report.id} (${report.drifts.length} drifts)`);
+  // 각 drift entry를 wiki sync 후보로 등록
+  for (const drift of report.drifts) {
+    const noteContent = [
+      `# [Drift] ${drift.field} — ${drift.severity}`,
+      '',
+      `| 항목 | 값 |`,
+      `|------|-----|`,
+      `| 필드 | ${drift.field} |`,
+      `| 기대값 | ${String(drift.desiredValue)} |`,
+      `| 현재값 | ${String(drift.currentValue)} |`,
+      `| 심각도 | ${drift.severity} |`,
+      `| 카테고리 | ${drift.category} |`,
+      '',
+      `Report ID: ${report.id}`,
+      `Device: ${report.deviceId}`,
+    ].join('\n');
+    if (vaultPath) {
+      try {
+        createObsidianNote(
+          vaultPath,
+          `[Drift] ${drift.field} — ${drift.severity}`,
+          noteContent,
+          ['drift', drift.category, drift.severity],
+        );
+      } catch (err) {
+        log.warn(`Failed to create drift note: ${err}`);
+      }
+    }
+  }
+
+  log.info(`Drift report synced: ${report.id}`);
+}
+
+/**
+ * Lesson 문서를 Obsidian에 동기화
+ */
+export function syncLessonDocument(
+  lesson: LessonDocumentForSync,
+  vaultPath?: string,
+): void {
+  log.info(`Syncing lesson document: ${lesson.id}`);
+  if (vaultPath) {
+    try {
+      createLessonNote(vaultPath, {
+        title: lesson.title,
+        product: lesson.product,
+        severity: lesson.severity,
+        background: lesson.background,
+        lessonText: lesson.lessonText,
+        application: lesson.application,
+        feedbackId: lesson.sourceFailureId,
+      });
+    } catch (err) {
+      log.warn(`Failed to create lesson note: ${err}`);
+    }
+  }
+
+  log.info(`Lesson document synced: ${lesson.id}`);
 }

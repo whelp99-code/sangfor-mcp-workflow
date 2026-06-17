@@ -323,3 +323,109 @@ export function searchObsidianNotes(
       note.tags.some((t) => t.toLowerCase().includes(lowerQuery))
   );
 }
+
+// ─── PR-30: Drift Note 생성 ─────────────────────────────────────────────────
+
+export interface DriftEntry {
+  id: string;
+  field: string;
+  desiredValue: string | number | boolean | null;
+  currentValue: string | number | boolean | null;
+  severity: 'info' | 'warning' | 'critical';
+  category: string;
+  detectedAt: string;
+}
+
+/**
+ * DriftEntry를 Obsidian 노트로 변환
+ */
+export function createDriftNote(drift: DriftEntry): ObsidianNote {
+  const title = `[Drift] ${drift.field} — ${drift.severity}`;
+  const tags = ['drift', drift.category, drift.severity];
+
+  const frontmatter: Record<string, unknown> = {
+    driftId: drift.id,
+    field: drift.field,
+    severity: drift.severity,
+    category: drift.category,
+    detectedAt: drift.detectedAt,
+  };
+
+  const body = [
+    `# ${title}`,
+    '',
+    '## 설정 Drift 감지',
+    '',
+    `| 항목 | 값 |`,
+    `|------|-----|`,
+    `| 필드 | ${drift.field} |`,
+    `| 기대값 | ${String(drift.desiredValue)} |`,
+    `| 현재값 | ${String(drift.currentValue)} |`,
+    `| 심각도 | ${drift.severity} |`,
+    `| 카테고리 | ${drift.category} |`,
+    `| 감지 시각 | ${drift.detectedAt} |`,
+    '',
+    '## 조치 사항',
+    '',
+    '- [ ] drift 원인 분석',
+    '- [ ] desired state로 복구 또는 drift 허용 결정',
+    '- [ ] 관련 playbook 업데이트 검토',
+  ].join('\n');
+
+  return {
+    title,
+    frontmatter: frontmatter as Record<string, unknown>,
+    body,
+    tags,
+    links: [],
+    filePath: '', // 파일 저장 전이므로 빈 값
+  };
+}
+
+/**
+ * LessonDocument를 Obsidian 노트로 변환
+ */
+export function createLessonNoteFromDocument(lesson: {
+  id: string;
+  title: string;
+  product: string;
+  severity: string;
+  background: string;
+  lessonText: string;
+  application: string;
+  sourceFailureId: string;
+}): ObsidianNote {
+  const tags = ['lesson', lesson.product.toLowerCase(), lesson.severity, 'auto-generated'];
+
+  const frontmatter: Record<string, unknown> = {
+    lessonId: lesson.id,
+    product: lesson.product,
+    severity: lesson.severity,
+    sourceFailureId: lesson.sourceFailureId,
+  };
+
+  const body = [
+    `# ${lesson.title}`,
+    '',
+    '## 배경',
+    lesson.background,
+    '',
+    '## 교훈',
+    lesson.lessonText,
+    '',
+    '## 적용 방안',
+    lesson.application,
+    '',
+    `## 관련 실패`,
+    `실패 ID: ${lesson.sourceFailureId}`,
+  ].join('\n');
+
+  return {
+    title: lesson.title,
+    frontmatter,
+    body,
+    tags,
+    links: [],
+    filePath: '',
+  };
+}

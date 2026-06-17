@@ -25,7 +25,7 @@ export interface PricingInfo {
   notes: string;
 }
 
-export interface ExtractionResult {
+export interface FeatureExtractionResult {
   vendor: string;
   product: string;
   features: ExtractedFeature[];

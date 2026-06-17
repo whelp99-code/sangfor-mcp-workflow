@@ -179,4 +179,137 @@ export class LearningScheduler {
     }
     return now.toISOString();
   }
+
+  // ─── PR-30: Failure → Learning 메서드 ────────────────────────────────────
+
+  private learningCandidates: Map<string, LearningCandidate> = new Map();
+  private lessonDocuments: Map<string, LessonDocument> = new Map();
+
+  /**
+   * 실패를 playbook과 연결하여 학습 후보 생성
+   * 주의: 자동으로 playbook을 수정하지 않음 — 사람 검토 필요
+   */
+  linkFailureToPlaybook(
+    failure: FailureRecord,
+    playbookId: string,
+  ): LearningCandidate {
+    const candidateId = nowId('candidate');
+    log.info(`Linking failure ${failure.id} to playbook ${playbookId}`);
+
+    const candidate: LearningCandidate = {
+      id: candidateId,
+      failureId: failure.id,
+      playbookId,
+      linkedAt: nowISO(),
+      status: 'pending_review',
+      // 원본 playbook이 수정되지 않도록 보호
+      originalPlaybookSnapshot: failure.playbookSnapshot ?? '{}',
+    };
+
+    this.learningCandidates.set(candidateId, candidate);
+    return candidate;
+  }
+
+  /**
+   * 실패에서 교훈 문서 생성
+   */
+  generateLessonFromFailure(failure: FailureRecord): LessonDocument {
+    const lessonId = nowId('lesson');
+    log.info(`Generating lesson from failure: ${failure.id}`);
+
+    const lesson: LessonDocument = {
+      id: lessonId,
+      title: `[교훈] ${failure.product} — ${failure.error.substring(0, 80)}`,
+      product: failure.product,
+      severity: failure.severity,
+      background: `실행 ID: ${failure.executionId}\n에러: ${failure.error}\n발생 시각: ${failure.occurredAt}`,
+      lessonText: `${failure.product} 환경에서 "${failure.error}" 오류가 발생했습니다. ` +
+        `동일한 환경에서 재발 방지를 위해 playbook 점검 항목 추가를 권장합니다.`,
+      application: '유사 환경의 precheck/postcheck에 해당 조건을 추가하세요.',
+      sourceFailureId: failure.id,
+      createdAt: nowISO(),
+      status: 'draft',
+    };
+
+    this.lessonDocuments.set(lessonId, lesson);
+    return lesson;
+  }
+
+  /**
+   * 교훈에서 playbook 개선 후보 생성
+   * 주의: 원본 playbook은 수정하지 않음 — 개선 제안만 생성
+   */
+  createPlaybookImprovementCandidate(lesson: LessonDocument): ImprovementCandidate {
+    const candidateId = nowId('improvement');
+    log.info(`Creating improvement candidate from lesson: ${lesson.id}`);
+
+    const candidate: ImprovementCandidate = {
+      id: candidateId,
+      lessonId: lesson.id,
+      title: `[개선 제안] ${lesson.title}`,
+      description: lesson.lessonText,
+      proposedChanges: `교훈 "${lesson.id}" 기반 개선 제안 — ${lesson.application}`,
+      status: 'pending_review',
+      // 원본 playbook 보호: 검토 전까지 수정 불가
+      safetyGuard: '사람 검토 전 playbook 원본이 수정되지 않도록 보호됨',
+      createdAt: nowISO(),
+    };
+
+    return candidate;
+  }
+
+  // 학습 후보 조회
+  getLearningCandidates(): LearningCandidate[] {
+    return Array.from(this.learningCandidates.values());
+  }
+
+  // 교훈 문서 조회
+  getLessonDocuments(): LessonDocument[] {
+    return Array.from(this.lessonDocuments.values());
+  }
+}
+
+// ─── PR-30: Failure / Learning 타입 ────────────────────────────────────────
+
+export interface FailureRecord {
+  id: string;
+  executionId: string;
+  product: string;
+  error: string;
+  severity: 'info' | 'warning' | 'critical';
+  occurredAt: string;
+  playbookSnapshot?: string;
+}
+
+export interface LearningCandidate {
+  id: string;
+  failureId: string;
+  playbookId: string;
+  linkedAt: string;
+  status: 'pending_review' | 'approved' | 'rejected';
+  originalPlaybookSnapshot: string;
+}
+
+export interface LessonDocument {
+  id: string;
+  title: string;
+  product: string;
+  severity: string;
+  background: string;
+  lessonText: string;
+  application: string;
+  sourceFailureId: string;
+  createdAt: string;
+  status: 'draft' | 'reviewed' | 'published';
+}
+
+export interface ImprovementCandidate {
+  id: string;
+  lessonId: string;
+  title: string;
+  description: string;
+  proposedChanges: string;
+  status: 'pending_review' | 'approved' | 'rejected';
+  safetyGuard: string;
+  createdAt: string;
 }

@@ -3,6 +3,7 @@
  */
 
 import { nowId, nowISO, createLogger } from '@sangfor/workflow-shared';
+import type { AdapterBoundary, UIActionConstraint } from './types.js';
 
 const log = createLogger('device-access');
 
@@ -254,6 +255,52 @@ export class DeviceAccessManager {
     return {
       valid: errors.length === 0,
       errors,
+    };
+  }
+
+  // ─── PR-25: Adapter Boundary 조회 ────────────────────────────────────────
+
+  /**
+   * 제품과 기능에 따른 AdapterBoundary 반환
+   */
+  getAdapterBoundary(product: string, feature: string): AdapterBoundary {
+    const featureLower = feature.toLowerCase();
+
+    // API 기반 기능
+    if (featureLower.includes('syslog') || featureLower.includes('api') || featureLower.includes('rest')) {
+      return {
+        adapterType: 'api',
+        supportedActions: ['read', 'write', 'query'],
+        constraints: {
+          selectorRequired: false,
+          capabilityBased: false,
+          idempotencyRequired: true,
+        },
+      };
+    }
+
+    // SSH 기반 기능
+    if (featureLower.includes('cli') || featureLower.includes('ssh') || featureLower.includes('terminal')) {
+      return {
+        adapterType: 'ssh',
+        supportedActions: ['execute', 'read', 'write'],
+        constraints: {
+          selectorRequired: false,
+          capabilityBased: false,
+          idempotencyRequired: false,
+        },
+      };
+    }
+
+    // UI 기반 기능 (기본값)
+    return {
+      adapterType: 'ui',
+      supportedActions: ['toggle', 'select', 'input', 'checkbox', 'click_button'],
+      constraints: {
+        selectorRequired: false,
+        capabilityBased: true,
+        idempotencyRequired: true,
+      },
     };
   }
 }

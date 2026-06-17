@@ -155,6 +155,33 @@ export class ToolRegistry {
     if (tags.length === 0) tags.push('product-agnostic');
     return tags;
   }
+
+  // ─── PR-25: 저수준 클릭 tool 필터링 ───────────────────────────────────────
+
+  /**
+   * 저수준 클릭 tool이 MCP로 직접 노출되지 않도록 필터링
+   * 고수준 tool만 반환 (import_excel, analyze_requirements, generate_change_plan 등)
+   */
+  listSafeTools(): ToolDefinition[] {
+    const unsafePatterns = [
+      'click_',
+      'ui_action',
+      'raw_click',
+      'raw_input',
+      'raw_select',
+      'cdp_',
+      'playwright_',
+      'element_click',
+      'selector_',
+      'low_level_',
+    ];
+
+    return this.listTools().filter(tool => {
+      const nameLower = tool.name.toLowerCase();
+      // 저수준 tool 패턴에 매칭되지 않는 tool만 반환
+      return !unsafePatterns.some(pattern => nameLower.includes(pattern));
+    });
+  }
 }
 
 // ─── 기본 tool 정의 (MCP 서버 연결 전 fallback) ─────────────────────────────

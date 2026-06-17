@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@sangfor/workflow-shared": "workspace:*",
-    "@sangfor/workflow-core": "workspace:*"
+    "@sangfor/workflow-core": "workspace:*",
+    "@sangfor/workflow-engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0"

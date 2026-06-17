@@ -8,8 +8,10 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createLogger, nowId, nowISO } from '@sangfor/workflow-shared';
-import type { Scenario, ScenarioSetting, ScenarioSource } from './scenario-db';
-import { ScenarioDB } from './scenario-db';
+import type { Scenario, ScenarioSetting, ScenarioSource } from './scenario-db.js';
+import { ScenarioDB } from './scenario-db.js';
+import type { Playbook } from './playbook-schema.js';
+import { validatePlaybook } from './playbook-schema.js';
 
 const log = createLogger('scenario-extractor');
 
@@ -380,7 +382,7 @@ Return a JSON array. Only include settings that can be automated via UI.
         }
         // LLM이 발견한 새 설정 액션 추가
         for (const setting of s.settings) {
-          if (!existing.settings.some(e => e.label === setting.label)) {
+          if (!existing.settings.some((e: ScenarioSetting) => e.label === setting.label)) {
             existing.settings.push(setting);
           }
         }
@@ -388,6 +390,82 @@ Return a JSON array. Only include settings that can be automated via UI.
     }
 
     return Array.from(merged.values());
+  }
+
+  // ── 6단계: 시나리오 → 플레이북 변환 ──
+
+  convertScenarioToPlaybook(scenario: Scenario): Playbook {
+    const steps = scenario.settings.map((setting, index) => ({
+      id: nowId('step'),
+      title: setting.label,
+      description: setting.description ?? `${setting.label} 설정 변경`,
+      adapter: 'ui' as const,
+      action: this.settingTypeToAction(setting.type),
+      input: {
+        label: setting.label,
+        value: setting.value ?? '',
+        ...(setting.selector ? { selector: setting.selector } : {}),
+      },
+      expectedChange: {
+        field: setting.label,
+        before: null as string | number | boolean | null,
+        after: setting.value ?? true,
+      },
+      order: index + 1,
+    }));
+
+    const postchecks = scenario.validation.criteria.map((criterion, index) => ({
+      id: `postcheck_${index + 1}`,
+      description: criterion,
+      type: 'state_match' as const,
+      expectedValue: true,
+    }));
+
+    const playbook: Playbook = {
+      id: scenario.id,
+      product: scenario.product as Playbook['product'],
+      capability: scenario.feature,
+      riskLevel: (scenario.riskLevel as Playbook['riskLevel']) ?? 'medium',
+      prechecks: [],
+      steps,
+      postchecks,
+      rollback: [],
+      approval: {
+        required: scenario.approvalRequired ?? true,
+        reason: `${scenario.feature} 설정 변경 — ${scenario.product}`,
+      },
+      source: 'manual_extract',
+      metadata: {
+        createdAt: scenario.source.extractedAt,
+        tags: scenario.menuPath,
+      },
+      description: scenario.description,
+    };
+
+    const validation = validatePlaybook(playbook);
+    if (!validation.valid) {
+      log.warn(`Playbook validation warnings for ${playbook.id}: ${validation.errors.map(e => e.message).join('; ')}`);
+    }
+
+    return playbook;
+  }
+
+  /**
+   * 추출된 시나리오를 플레이북으로 변환 후 등록
+   */
+  convertExtractionToPlaybooks(result: ExtractionResult): Playbook[] {
+    return result.scenarios.map(s => this.convertScenarioToPlaybook(s));
+  }
+
+  private settingTypeToAction(type: ScenarioSetting['type']): string {
+    const actionMap: Record<ScenarioSetting['type'], string> = {
+      toggle: 'toggle_setting',
+      checkbox: 'set_checkbox',
+      select: 'select_option',
+      input: 'fill_input',
+      click_button: 'click_element',
+    };
+    return actionMap[type];
   }
 
   private async callLLM(prompt: string): Promise<string> {

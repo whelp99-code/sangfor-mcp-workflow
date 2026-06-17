@@ -49,6 +49,7 @@ sangfor-mcp-workflow/
 │   └── operator-console/    # 웹 UI + REST API
 ├── packages/
 │   ├── workflow-core/       # 워크플로우 엔진 (파이프라인, 스케줄러)
+│   ├── workflow-engine/     # AI 기반 동적 워크플로우 엔진
 │   ├── health-checker/      # 실장비 점검 모듈
 │   ├── wiki-sync/           # Obsidian/GitHub Wiki 동기화
 │   └── shared/              # 공통 타입 및 유틸리티
@@ -57,7 +58,45 @@ sangfor-mcp-workflow/
 └── docs/                    # 문서
 ```
 
-## 기술 스택
+## Phase 0: MCP Tools & Operator Console (PR-27)
+
+### MCP Tools
+
+Phase 0에서 추가된 MCP tools는 장비 상태 조회 → 계획 수립 → 승인 → 실행 → 검증의 4단계 파이프라인을 구현합니다.
+
+**모든 위험 작업은 직접 실행하지 않고 plan → approval → execution 흐름을 따릅니다.**
+
+| Tool | 유형 | 설명 |
+|------|------|------|
+| `get_device_snapshot` | Read-Only | 장비의 현재 상태를 스냅샷으로 수집 (변경 없음) |
+| `plan_configuration_change` | Plan | intent + snapshot → OperationPlan 생성 (실행 안 함) |
+| `validate_operation_plan` | Validate | plan 검증 (입력 누락, 위험도 분석) |
+| `request_operation_approval` | Approval | 승인 요청 생성 |
+| `apply_approved_operation` | Execute | **승인된** plan만 실행 (미승인 거부) |
+| `verify_configuration` | Verify | Post-check: 변경이 올바르게 적용되었는지 확인 |
+| `generate_evidence_report` | Report | 실행 결과 evidence Markdown 보고서 생성 |
+
+### Workflow
+
+```
+get_device_snapshot → plan_configuration_change → validate_operation_plan
+    → request_operation_approval → [운영자 승인] → apply_approved_operation
+    → verify_configuration → generate_evidence_report
+```
+
+### REST API (Operator Console)
+
+| Endpoint | Method | 설명 |
+|----------|--------|------|
+| `/api/snapshots/:product` | GET | 장비 스냅샷 조회 |
+| `/api/plan` | POST | Operation Plan 생성 |
+| `/api/approvals` | GET | 승인 대기 목록 조회 |
+| `/api/approvals/:id/approve` | POST | 승인 처리 |
+| `/api/approvals/:id/reject` | POST | 거절 처리 |
+| `/api/execute/:planId` | POST | 승인된 plan 실행 |
+| `/api/evidence/:executionId` | GET | Evidence 보고서 조회 |
+
+## 기술 슃�
 
 | 영역 | 기술 |
 |------|------|

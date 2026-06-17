@@ -12,10 +12,10 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createLogger, nowISO } from '@sangfor/workflow-shared';
-import { ScenarioDB, type Scenario } from './scenario-db';
-import { ManualScenarioExtractor, type ExtractionResult } from './manual-scenario-extractor';
-import { SangforAPIDiscovery, type HARCaptureConfig } from './sangfor-api-discovery';
-import { DeviceVerifier, type DeviceCredentials, type VerificationReport } from './device-verifier';
+import { ScenarioDB, type Scenario, type ScenarioSetting } from './scenario-db.js';
+import { ManualScenarioExtractor, type ExtractionResult } from './manual-scenario-extractor.js';
+import { SangforAPIDiscovery, type HARCaptureConfig } from './sangfor-api-discovery.js';
+import { DeviceVerifier, type DeviceCredentials, type VerificationReport } from './device-verifier.js';
 
 const log = createLogger('sangfor-intelligence');
 
@@ -215,7 +215,7 @@ export class SangforIntelligence {
 
     try {
       const scenarioIds = input.scenarioIds ??
-        this.scenarioDB.findByProduct(input.product).map(s => s.id);
+        this.scenarioDB.findByProduct(input.product).map((s: Scenario) => s.id);
 
       for (const id of scenarioIds) {
         try {
@@ -264,7 +264,7 @@ export class SangforIntelligence {
       const scenarios = this.scenarioDB.loadAll();
 
       // 시나리오별 가이드 생성을 위한 데이터 구성
-      const guides = scenarios.map(s => ({
+      const guides = scenarios.map((s: Scenario) => ({
         id: s.id,
         product: s.product,
         feature: s.feature,
@@ -276,7 +276,7 @@ export class SangforIntelligence {
           method: s.apiEndpoint.method,
           url: s.apiEndpoint.url,
         } : undefined,
-        settings: s.settings.map(setting => ({
+        settings: s.settings.map((setting: ScenarioSetting) => ({
           type: setting.type,
           label: setting.label,
           value: setting.value,
@@ -295,7 +295,7 @@ export class SangforIntelligence {
 
       // 제품별 가이드 데이터
       for (const product of ['EPP', 'IAG', 'CC']) {
-        const productGuides = guides.filter(g => g.product === product);
+        const productGuides = guides.filter((g) => g.product === product);
         writeFileSync(
           join(outputDir, `${product.toLowerCase()}_guides.json`),
           JSON.stringify(productGuides, null, 2),

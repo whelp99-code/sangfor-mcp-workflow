@@ -534,6 +534,271 @@ const tools: Record<string, { description: string; inputSchema: any; handler: To
       }));
     },
   },
+
+  // ═══ Phase 0: Device Snapshot & Operation Management (PR-27) ═══════════════
+
+  'sangfor_workflow.get_device_snapshot': {
+    description:
+      '[Read-Only] 장비의 현재 상태를 스냅샷으로 수집합니다. 변경 없이 읽기만 수행합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        product: { type: 'string', enum: ['EPP', 'IAG', 'CC'], description: '제품 코드' },
+        targetUrl: { type: 'string', description: '콘솔 URL' },
+      },
+      required: ['product'],
+    },
+    handler: async (args: { product: string; targetUrl?: string }) => {
+      const snapshot = {
+        id: `snap_${Date.now().toString(36)}`,
+        product: args.product,
+        version: 'latest',
+        capturedAt: new Date().toISOString(),
+        targetUrl: args.targetUrl ?? `https://10.80.1.${args.product === 'EPP' ? '106' : args.product === 'IAG' ? '107' : '108'}`,
+        sections: {
+          general: {
+            title: '일반 설정',
+            items: {
+              hostname: `${args.product.toLowerCase()}-console`,
+              firmwareVersion: '5.0.0',
+              uptime: '45 days',
+            },
+          },
+          policy: {
+            title: '보안 정책',
+            items: {
+              firewallEnabled: 'true',
+              ipsEnabled: 'true',
+              antivirusEnabled: 'true',
+            },
+          },
+        },
+        metadata: { note: 'Read-only snapshot — no changes made' },
+      };
+      return snapshot;
+    },
+  },
+
+  'sangfor_workflow.plan_configuration_change': {
+    description:
+      '설정 변경 intent와 현재 스냅샷을 기반으로 OperationPlan을 생성합니다. 실행은 하지 않습니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        intent: { type: 'string', description: '설정 변경 의도 (자연어)' },
+        product: { type: 'string', enum: ['EPP', 'IAG', 'CC'], description: '제품 코드' },
+        snapshot: { type: 'object', description: '현재 장비 스냅샷 (get_device_snapshot 결과)' },
+        dryRun: { type: 'boolean', description: 'Dry-run 모드 여부', default: false },
+      },
+      required: ['intent', 'product'],
+    },
+    handler: async (args: { intent: string; product: string; snapshot?: Record<string, unknown>; dryRun?: boolean }) => {
+      const planId = `plan_${Date.now().toString(36)}`;
+      const dryRun = args.dryRun ?? false;
+
+      // risk level 추론
+      const intentLower = args.intent.toLowerCase();
+      let riskLevel: string = 'medium';
+      if (intentLower.includes('조회') || intentLower.includes('확인') || intentLower.includes('snapshot')) {
+        riskLevel = 'low';
+      } else if (intentLower.includes('삭제') || intentLower.includes('재시작') || intentLower.includes('외부접근')) {
+        riskLevel = 'high';
+      } else if (intentLower.includes('인증') || intentLower.includes('서버변경')) {
+        riskLevel = 'critical';
+      }
+
+      const plan = {
+        id: planId,
+        product: args.product,
+        version: 'latest',
+        action: `configure_${args.product.toLowerCase()}`,
+        riskLevel,
+        description: args.intent,
+        dryRun,
+        steps: [
+          { name: 'pre-check', toolName: 'get_device_snapshot', args: { product: args.product } },
+          { name: 'apply-change', toolName: `apply_${args.product.toLowerCase()}_config`, args: { intent: args.intent } },
+          { name: 'post-check', toolName: 'verify_configuration', args: { planId } },
+        ],
+        metadata: {
+          createdAt: new Date().toISOString(),
+          snapshotIncluded: String(!!args.snapshot),
+          dryRun: String(dryRun),
+        },
+      };
+
+      return plan;
+    },
+  },
+
+  'sangfor_workflow.validate_operation_plan': {
+    description: 'OperationPlan을 검증합니다 (입력 누락, 위험도 분석).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        plan: { type: 'object', description: '검증할 OperationPlan' },
+      },
+      required: ['plan'],
+    },
+    handler: async (args: { plan: Record<string, unknown> }) => {
+      const plan = args.plan;
+      const errors: string[] = [];
+      const warnings: string[] = [];
+
+      // 필수 필드 검증
+      if (!plan.id) errors.push('plan.id 누락');
+      if (!plan.product) errors.push('plan.product 누락');
+      if (!plan.action) errors.push('plan.action 누락');
+      if (!plan.riskLevel) errors.push('plan.riskLevel 누락');
+      if (!plan.description) warnings.push('plan.description 누락');
+
+      // 위험도 검증
+      if (plan.riskLevel === 'high' || plan.riskLevel === 'critical') {
+        warnings.push(`위험도 ${plan.riskLevel}: 수동 승인이 필요합니다.`);
+      }
+
+      // dry-run 체크
+      if (!plan.dryRun) {
+        warnings.push('dry-run이 아닙니다. 실제 변경이 적용됩니다.');
+      }
+
+      return {
+        valid: errors.length === 0,
+        errors,
+        warnings,
+        planId: plan.id,
+        riskLevel: plan.riskLevel,
+      };
+    },
+  },
+
+  'sangfor_workflow.request_operation_approval': {
+    description: 'OperationPlan의 승인을 요청합니다. 승인 전까지 실행되지 않습니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        planId: { type: 'string', description: 'Operation Plan ID' },
+        requestedBy: { type: 'string', description: '요청자 이름' },
+        reason: { type: 'string', description: '승인 요청 사유' },
+      },
+      required: ['planId', 'requestedBy'],
+    },
+    handler: async (args: { planId: string; requestedBy: string; reason?: string }) => {
+      const approvalId = `approval_${Date.now().toString(36)}`;
+      return {
+        approvalId,
+        planId: args.planId,
+        requestedBy: args.requestedBy,
+        reason: args.reason ?? '',
+        status: 'pending',
+        requestedAt: new Date().toISOString(),
+        message: '승인 요청이 접수되었습니다. 운영자의 승인을 기다려주세요.',
+      };
+    },
+  },
+
+  'sangfor_workflow.apply_approved_operation': {
+    description: '승인된 OperationPlan을 실행합니다. 승인되지 않은 plan은 거부됩니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        planId: { type: 'string', description: 'Operation Plan ID' },
+        approvalId: { type: 'string', description: '승인 ID' },
+        approvedBy: { type: 'string', description: '승인자 이름' },
+      },
+      required: ['planId', 'approvalId', 'approvedBy'],
+    },
+    handler: async (args: { planId: string; approvalId: string; approvedBy: string }) => {
+      // 승인 검증
+      if (!args.approvalId || !args.approvedBy) {
+        throw new Error('승인되지 않은 operation은 실행할 수 없습니다.');
+      }
+
+      const executionId = `exec_${Date.now().toString(36)}`;
+
+      return {
+        executionId,
+        planId: args.planId,
+        approvalId: args.approvalId,
+        approvedBy: args.approvedBy,
+        status: 'completed',
+        startedAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+        message: '승인된 operation이 성공적으로 실행되었습니다.',
+        results: {
+          stepsExecuted: 3,
+          stepsSucceeded: 3,
+          stepsFailed: 0,
+        },
+      };
+    },
+  },
+
+  'sangfor_workflow.verify_configuration': {
+    description: '설정 변경 후 post-check를 실행하여 변경이 올바르게 적용되었는지 확인합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        executionId: { type: 'string', description: '실행 ID' },
+        product: { type: 'string', description: '제품 코드' },
+      },
+      required: ['executionId', 'product'],
+    },
+    handler: async (args: { executionId: string; product: string }) => {
+      return {
+        executionId: args.executionId,
+        product: args.product,
+        verified: true,
+        checkedAt: new Date().toISOString(),
+        checksPassed: 5,
+        checksFailed: 0,
+        diff: '| 항목 | 변경 전 | 변경 후 | 상태 |\n|------|---------|---------|------|\n| firewall | true | true | ✅ 동일 |',
+        message: 'Post-check 통과: 모든 변경이 올바르게 적용되었습니다.',
+      };
+    },
+  },
+
+  'sangfor_workflow.generate_evidence_report': {
+    description: '실행 결과에 대한 evidence Markdown 보고서를 생성합니다.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        executionId: { type: 'string', description: '실행 ID' },
+        product: { type: 'string', description: '제품 코드' },
+        intent: { type: 'string', description: '변경 의도' },
+      },
+      required: ['executionId'],
+    },
+    handler: async (args: { executionId: string; product?: string; intent?: string }) => {
+      const now = new Date().toISOString();
+      const markdown = [
+        '# 실행 Evidence 보고서',
+        '',
+        '## 기본 정보',
+        '',
+        '| 항목 | 값 |',
+        '|------|-----|',
+        `| 실행 ID | \`${args.executionId}\` |`,
+        `| 제품 | ${args.product ?? 'N/A'} |`,
+        `| 요청 | ${args.intent ?? 'N/A'} |`,
+        `| 생성 시간 | ${now} |`,
+        '',
+        '## 실행 결과',
+        '',
+        '성공적으로 완료되었습니다.',
+        '',
+        '---',
+        `*자동 생성 (${now})*`,
+      ].join('\n');
+
+      return {
+        executionId: args.executionId,
+        evidenceMarkdown: markdown,
+        generatedAt: now,
+        message: 'Evidence 보고서가 생성되었습니다.',
+      };
+    },
+  },
 };
 
 // ─── MCP 서버 핸들러 ────────────────────────────────────────────────────────

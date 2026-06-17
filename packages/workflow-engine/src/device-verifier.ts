@@ -1,17 +1,19 @@
 /**
- * Device Verifier — 실장비 검증 + 시나리오 개선
+ * Device Verifier — 실장비 검증 + 시나리오 개선 + 실행 후 검증
  *
  * 시나리오를 실장비에서 실행하고, 성공/실패를 기록.
  * 실패한 경우 시나리오를 자동으로 수정/개선.
  * 성공한 경우 API 엔드포인트를 캡처하여 시나리오에 연결.
+ *
+ * PostVerifier: 설정 변경 전후 스냅샷 비교 + evidence 생성
  */
 
 import { chromium, type Page, type Browser } from 'playwright';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createLogger, nowISO } from '@sangfor/workflow-shared';
-import { ScenarioDB, type Scenario, type ScenarioSetting } from './scenario-db';
-import { SangforAPIDiscovery, type HAREntry } from './sangfor-api-discovery';
+import { createLogger, nowISO, nowId } from '@sangfor/workflow-shared';
+import { ScenarioDB, type Scenario, type ScenarioSetting } from './scenario-db.js';
+import { SangforAPIDiscovery, type HAREntry } from './sangfor-api-discovery.js';
 
 const log = createLogger('device-verifier');
 
@@ -365,7 +367,7 @@ export class DeviceVerifier {
     for (const imp of improvements) {
       switch (imp.type) {
         case 'setting_label_fix': {
-          const setting = scenario.settings.find(s => s.label === imp.before);
+          const setting = scenario.settings.find((s: ScenarioSetting) => s.label === imp.before);
           if (setting) {
             setting.label = imp.after;
             log.info(`[${scenarioId}] 라벨 수정: "${imp.before}" → "${imp.after}"`);
@@ -450,7 +452,7 @@ export class DeviceVerifier {
       let bestMatch = '';
       let bestScore = 0;
 
-      for (const el of allElements) {
+      for (const el of Array.from(allElements)) {
         const text = (el.textContent?.trim() ?? '').toLowerCase();
         if (!text || text.length > 100) continue;
 
@@ -476,5 +478,300 @@ export class DeviceVerifier {
     const path = join(this.outputDir, `${name}_${Date.now()}.png`);
     await page.screenshot({ path, fullPage: false });
     return path;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PostVerifier — 실행 후 검증 (PR-26)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const postLog = createLogger('post-verifier');
+
+// ─── 타입 ────────────────────────────────────────────────────────────────────
+
+/** 장비 스냅샷: 키-값 쌍으로 표현되는 장비 상태 */
+export interface PostVerifierSnapshot {
+  product: string;
+  version: string;
+  capturedAt: string;
+  sections: Record<string, SnapshotSection>;
+}
+
+export interface SnapshotSection {
+  title: string;
+  items: Record<string, string>;
+}
+
+/** 검증용 기대 변경 사항 */
+export interface VerificationExpectedChange {
+  section: string;
+  key: string;
+  expectedValue: string;
+  description: string;
+  critical: boolean;  // 필수 변경 여부
+}
+
+/** 검증 실패 분류 */
+export type FailureCategory =
+  | 'value_mismatch'      // 값이 기대와 다름
+  | 'missing_key'         // 키가 존재하지 않음
+  | 'unexpected_change'   // 예상치 못한 변경 발생
+  | 'partial_apply'       // 일부만 적용됨
+  | 'timeout'             // 검증 타임아웃
+  | 'snapshot_error';     // 스냅샷 수집 오류
+
+/** 실행 후 검증 결과 */
+export interface PostCheckResult {
+  id: string;
+  executionId: string;
+  passed: boolean;
+  failed: PostCheckFailure[];
+  diff: string;
+  evidencePath: string;
+  checkedAt: string;
+  duration: number;
+}
+
+export interface PostCheckFailure {
+  section: string;
+  key: string;
+  expected: string;
+  actual: string;
+  category: FailureCategory;
+  description: string;
+}
+
+// ─── PostVerifier 클래스 ─────────────────────────────────────────────────────
+
+export class PostVerifier {
+  private outputDir: string;
+
+  constructor(options?: { outputDir?: string }) {
+    this.outputDir = options?.outputDir ?? './outputs/evidence';
+  }
+
+  /**
+   * 실행 전후 스냅샷을 비교하여 검증 결과를 반환
+   */
+  verifyPostExecution(
+    executionId: string,
+    before: PostVerifierSnapshot,
+    after: PostVerifierSnapshot,
+    expectedChanges: VerificationExpectedChange[],
+  ): PostCheckResult {
+    const startTime = Date.now();
+    const failed: PostCheckFailure[] = [];
+
+    postLog.info(`Post-check 시작: ${executionId} (${expectedChanges.length} 항목)`);
+
+    for (const expected of expectedChanges) {
+      const afterSection = after.sections[expected.section];
+      const beforeSection = before.sections[expected.section];
+
+      // 키 존재 여부 확인
+      if (!afterSection || !(expected.key in afterSection.items)) {
+        failed.push({
+          section: expected.section,
+          key: expected.key,
+          expected: expected.expectedValue,
+          actual: '<missing>',
+          category: 'missing_key',
+          description: expected.description,
+        });
+        continue;
+      }
+
+      const actualValue = afterSection.items[expected.key];
+
+      // 값 비교
+      if (actualValue !== expected.expectedValue) {
+        const category = this.classifyFailure(
+          expected,
+          beforeSection?.items[expected.key],
+          actualValue,
+        );
+        failed.push({
+          section: expected.section,
+          key: expected.key,
+          expected: expected.expectedValue,
+          actual: actualValue,
+          category,
+          description: expected.description,
+        });
+      }
+    }
+
+    // 예상치 못한 변경 감지
+    const unexpectedChanges = this.detectUnexpectedChanges(before, after, expectedChanges);
+    for (const uc of unexpectedChanges) {
+      failed.push(uc);
+    }
+
+    const passed = failed.length === 0;
+    const diff = this.generateDiff(before, after);
+    const evidencePath = this.saveEvidence(executionId, before, after, failed, diff);
+    const duration = Date.now() - startTime;
+
+    const result: PostCheckResult = {
+      id: nowId('postcheck'),
+      executionId,
+      passed,
+      failed,
+      diff,
+      evidencePath,
+      checkedAt: nowISO(),
+      duration,
+    };
+
+    postLog.info(
+      `Post-check 완료: ${passed ? 'PASS' : 'FAIL'} — ` +
+      `${failed.length}건 실패, ${duration}ms`,
+    );
+
+    return result;
+  }
+
+  /**
+   * 전후 스냅샷을 사람이 읽을 수 있는 Markdown diff로 변환
+   */
+  generateDiff(before: PostVerifierSnapshot, after: PostVerifierSnapshot): string {
+    const lines: string[] = [];
+
+    lines.push('## 장비 상태 변경 Diff');
+    lines.push('');
+    lines.push(`| 항목 | 변경 전 | 변경 후 | 상태 |`);
+    lines.push(`|------|---------|---------|------|`);
+
+    // 모든 섹션의 모든 키를 비교
+    const allSections = new Set([
+      ...Object.keys(before.sections),
+      ...Object.keys(after.sections),
+    ]);
+
+    for (const sectionName of Array.from(allSections)) {
+      const beforeSection = before.sections[sectionName];
+      const afterSection = after.sections[sectionName];
+
+      const allKeys = new Set([
+        ...(beforeSection ? Object.keys(beforeSection.items) : []),
+        ...(afterSection ? Object.keys(afterSection.items) : []),
+      ]);
+
+      for (const key of Array.from(allKeys)) {
+        const beforeVal = beforeSection?.items[key] ?? '<없음>';
+        const afterVal = afterSection?.items[key] ?? '<없음>';
+
+        if (beforeVal === afterVal) {
+          lines.push(`| ${sectionName}/${key} | ${beforeVal} | ${afterVal} | ✅ 동일 |`);
+        } else {
+          lines.push(`| ${sectionName}/${key} | ${beforeVal} | ${afterVal} | 🔄 변경됨 |`);
+        }
+      }
+    }
+
+    lines.push('');
+    lines.push(`**스냅샷 시간**: 변경 전 ${before.capturedAt} → 변경 후 ${after.capturedAt}`);
+
+    return lines.join('\n');
+  }
+
+  /**
+   * 실패 원인을 카테고리로 분류
+   */
+  classifyFailure(
+    expected: VerificationExpectedChange,
+    beforeValue: string | undefined,
+    actualValue: string,
+  ): FailureCategory {
+    // 값이 비어있으면 부분 적용
+    if (!actualValue || actualValue === '') {
+      return 'partial_apply';
+    }
+
+    // 이전 값과 동일하면 변경이 아예 안 됨
+    if (beforeValue === actualValue) {
+      return 'value_mismatch';
+    }
+
+    // 값이 다르면 mismatch
+    return 'value_mismatch';
+  }
+
+  /**
+   * 예상치 못한 변경을 감지
+   */
+  private detectUnexpectedChanges(
+    before: PostVerifierSnapshot,
+    after: PostVerifierSnapshot,
+    expectedChanges: VerificationExpectedChange[],
+  ): PostCheckFailure[] {
+    const failures: PostCheckFailure[] = [];
+    const expectedKeys = new Set(
+      expectedChanges.map(ec => `${ec.section}/${ec.key}`),
+    );
+
+    const allSections = new Set([
+      ...Object.keys(before.sections),
+      ...Object.keys(after.sections),
+    ]);
+
+    for (const sectionName of Array.from(allSections)) {
+      const beforeSection = before.sections[sectionName];
+      const afterSection = after.sections[sectionName];
+      if (!beforeSection || !afterSection) continue;
+
+      for (const key of Object.keys(afterSection.items)) {
+        const compositeKey = `${sectionName}/${key}`;
+        if (expectedKeys.has(compositeKey)) continue;
+
+        const beforeVal = beforeSection.items[key];
+        const afterVal = afterSection.items[key];
+
+        if (beforeVal !== undefined && beforeVal !== afterVal) {
+          failures.push({
+            section: sectionName,
+            key,
+            expected: beforeVal,
+            actual: afterVal,
+            category: 'unexpected_change',
+            description: `예상치 못한 변경: ${compositeKey}`,
+          });
+        }
+      }
+    }
+
+    return failures;
+  }
+
+  /**
+   * evidence 파일을 저장하고 경로를 반환
+   */
+  private saveEvidence(
+    executionId: string,
+    before: PostVerifierSnapshot,
+    after: PostVerifierSnapshot,
+    failures: PostCheckFailure[],
+    diff: string,
+  ): string {
+    mkdirSync(this.outputDir, { recursive: true });
+
+    const evidence = {
+      executionId,
+      checkedAt: nowISO(),
+      product: after.product,
+      version: after.version,
+      passed: failures.length === 0,
+      failureCount: failures.length,
+      failures,
+      diff,
+      beforeSnapshot: before,
+      afterSnapshot: after,
+    };
+
+    const filePath = join(this.outputDir, `postcheck_${executionId}_${Date.now()}.json`);
+    writeFileSync(filePath, JSON.stringify(evidence, null, 2), 'utf-8');
+
+    postLog.info(`Evidence 저장: ${filePath}`);
+    return filePath;
   }
 }

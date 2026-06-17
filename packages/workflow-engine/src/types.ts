@@ -194,3 +194,78 @@ export interface WorkflowTemplate {
   }>;
   tags: string[];
 }
+
+// ─── Device Auto Ops re-exports ──────────────────────────────────────────────
+// 전용 모듈에서 정의된 타입들을 re-export
+export type {
+  SangforProduct,
+  DeviceSnapshot,
+  DeviceCapability,
+  DesiredState,
+  OperationStep,
+  OperationCheck,
+  OperationRisk,
+  ApprovalRequirement,
+  EvidenceRef,
+  OperationPlan,
+  AccessMethod,
+  AdapterType,
+  LicenseInfo,
+  DeviceObject,
+  DevicePolicy,
+  AuthSource,
+  NetworkInfo,
+  AlarmEntry,
+  RawRef,
+} from './device-model.js';
+
+export type {
+  UserIntent,
+  IntentAction,
+  ExpectedChange,
+  EvidencePolicy,
+  DryRunPlan,
+} from './operation-model.js';
+
+export type {
+  Playbook,
+  PlaybookStep,
+  PlaybookCheck,
+  PlaybookApproval,
+  ValidationResult,
+} from './playbook-schema.js';
+
+// ─── Operation Approval 타입 (types.ts 전용) ────────────────────────────────
+
+export interface OperationApprovalRequest {
+  operationId: string;
+  plan: import('./device-model.js').OperationPlan;
+  requestedAt: string;
+  status: 'pending' | 'approved' | 'rejected';
+  approvedBy?: string;
+  rejectedBy?: string;
+  reason?: string;
+}
+
+// ─── Adapter Boundary 타입 (types.ts 전용) ──────────────────────────────────
+
+export interface UIActionConstraint {
+  selectorRequired: boolean;
+  capabilityBased: boolean;
+  idempotencyRequired: boolean;
+}
+
+export interface AdapterBoundary {
+  adapterType: 'api' | 'ssh' | 'ui';
+  supportedActions: string[];
+  constraints: UIActionConstraint;
+}
+
+export interface StepResult {
+  stepId: string;
+  success: boolean;
+  output: Record<string, unknown>;
+  errors: string[];
+  duration: number;
+  dryRun: boolean;
+}

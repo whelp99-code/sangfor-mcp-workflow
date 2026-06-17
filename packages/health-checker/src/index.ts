@@ -5,3 +5,4 @@
 export * from './health-checker.js';
 export * from './snapshot-comparator.js';
 export * from './default-configs.js';
+export * from './device-snapshot.js';
