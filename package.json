@@ -9,7 +9,8 @@
     "dev:web": "tsx -r dotenv/config apps/operator-console/src/server.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint . --ext .ts",
+    "lint": "eslint .",
+    "audit:console": "node scripts/audit-operator-console.mjs",
     "build": "tsc -b",
     "health:check": "tsx scripts/run-health-check.ts",
     "e2e:sangfor": "tsx scripts/run-sangfor-readonly-e2e.ts",
@@ -24,10 +25,13 @@
     "wiki:sync": "tsx scripts/run-wiki-sync.ts"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
+    "globals": "^17.6.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.61.1",
     "vitest": "^3.0.0"
   },
   "engines": {

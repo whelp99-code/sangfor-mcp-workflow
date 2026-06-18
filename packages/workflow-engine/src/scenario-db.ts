@@ -276,7 +276,7 @@ export class ScenarioDB {
         .join('\n');
 
       // 중괄호 {} 표기법을 JSON으로 변환
-      let json = cleaned
+      const json = cleaned
         .replace(/:\s*\{([^}]*)\}/g, (_, inner) => {
           const pairs = inner.split(',').map((p: string) => {
             const [k, v] = p.split(':').map((s: string) => s.trim());
@@ -290,7 +290,7 @@ export class ScenarioDB {
       const result: Record<string, unknown> = {};
       let currentSection = result;
       const sectionStack: Record<string, unknown>[] = [result];
-      let indent = 0;
+      const indent = 0;
 
       for (const line of cleaned.split('\n')) {
         if (!line.trim() || line.trim().startsWith('#')) continue;

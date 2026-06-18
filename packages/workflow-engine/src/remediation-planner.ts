@@ -205,7 +205,7 @@ export class RemediationPlanner {
   private isKeywordMatch(text: string, capability: string): boolean {
     const textLower = text.toLowerCase();
     const capLower = capability.toLowerCase();
-    const keywords = capLower.split(/[\/\s]+/).filter(k => k.length > 2);
+    const keywords = capLower.split(/[/\s]+/).filter(k => k.length > 2);
 
     return keywords.some(kw => textLower.includes(kw));
   }
@@ -314,7 +314,7 @@ export class RemediationPlanner {
 
   private extractServiceName(itemName: string): string {
     // itemName에서 서비스명 추출 (예: "EPP 실시간 보호" → "EPP")
-    const parts = itemName.split(/[\s_\-]+/);
+    const parts = itemName.split(/[\s_-]+/);
     return parts[0] ?? itemName;
   }
 

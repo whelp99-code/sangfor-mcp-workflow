@@ -501,7 +501,6 @@ export class AutopilotPolicy {
    */
   private getFieldValue(plan: OperationPlan, field: string): string | boolean | undefined {
     const parts = field.split('.');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-unknown
     let current: unknown = plan;
 
     for (const part of parts) {
