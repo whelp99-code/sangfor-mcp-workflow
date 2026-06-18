@@ -138,6 +138,14 @@ const manualQA = new ManualQASystem(async (query, product) => {
     }
   }
   const results = await ragIndexer.search(query, { product, limit: 5 });
+  if (results.length === 0 && product) {
+    const broad = await ragIndexer.search(query, { limit: 5 });
+    return broad.map((r) => ({
+      content: r.chunk.content,
+      score: r.score,
+      metadata: { source: r.document.title, section: r.document.product },
+    }));
+  }
   return results.map((r) => ({
     content: r.chunk.content,
     score: r.score,
@@ -262,7 +270,7 @@ app.post('/api/workflows/generate', async (req, res) => {
 
 // 템플릿에서 생성
 app.post('/api/workflows/from-template', (req, res) => {
-  const { templateId, customerName, products } = req.body;
+  const { templateId, customerName, products, excelFilePath } = req.body;
 
   const workflow = templateManager.createWorkflowFromTemplate(templateId, {
     customerName,
@@ -271,7 +279,9 @@ app.post('/api/workflows/from-template', (req, res) => {
     environment: 'customer',
     riskLevel: 'medium',
     similarCases: [],
-    metadata: {},
+    metadata: {
+      excelFilePath: excelFilePath ?? './test-data/checklist.xlsx',
+    },
   });
 
   if (!workflow) {

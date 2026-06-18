@@ -98,16 +98,58 @@ export function parseMcpMenuRoutes(menuRoutes: unknown[]): MenuNode[] {
   });
 }
 
+// Synonym groups for MCP discover routes vs reference manual naming
+const MENU_SYNONYM_GROUPS: string[][] = [
+  ['dashboard', 'home'],
+  ['malware scan'],
+  ['app control'],
+  ['security events', 'threats', 'detection and response'],
+  ['endpoint inventory', 'endpoint agent list', 'endpoints'],
+  ['usb device control', 'behavior control', 'device control'],
+  ['agent deployment', 'update management'],
+  ['syslog reporting', 'syslog', 'data sync'],
+  ['behavior monitor'],
+  ['exceptions'],
+  ['interfaces', 'routing', 'general'],
+  ['url filtering', 'url application control', 'access control'],
+  ['internet access logs', 'logs'],
+];
+
+function normalizedTokens(name: string): string[] {
+  return normalizeMenuName(name).split(' ').filter(Boolean);
+}
+
+function namesMatchSynonyms(a: string, b: string): boolean {
+  const na = normalizeMenuName(a);
+  const nb = normalizeMenuName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+
+  for (const group of MENU_SYNONYM_GROUPS) {
+    const aHit = group.some((term) => na.includes(term) || term.includes(na));
+    const bHit = group.some((term) => nb.includes(term) || term.includes(nb));
+    if (aHit && bHit) return true;
+  }
+
+  const aTokens = normalizedTokens(a);
+  const bTokens = normalizedTokens(b);
+  return aTokens.some((t) => bTokens.includes(t) && t.length > 3);
+}
+
 function menuNodeMatches(manualNode: MenuNode, deviceFlat: MenuNode[]): boolean {
-  const manualNorm = normalizeMenuName(manualNode.name);
-  const manualLeaf = normalizeMenuName(manualNode.path[manualNode.path.length - 1] ?? manualNode.name);
+  const manualNames = [
+    manualNode.name,
+    ...(manualNode.path[manualNode.path.length - 1] ? [manualNode.path[manualNode.path.length - 1]] : []),
+  ];
 
   return deviceFlat.some((device) => {
-    const deviceNorm = normalizeMenuName(device.name);
-    if (deviceNorm === manualNorm || deviceNorm === manualLeaf) return true;
-
-    const deviceLeaf = normalizeMenuName(device.path[device.path.length - 1] ?? device.name);
-    return deviceLeaf === manualNorm || deviceLeaf === manualLeaf;
+    const deviceNames = [
+      device.name,
+      ...(device.path[device.path.length - 1] ? [device.path[device.path.length - 1]] : []),
+      ...device.path,
+    ];
+    return manualNames.some((mn) => deviceNames.some((dn) => namesMatchSynonyms(mn, dn)));
   });
 }
 
@@ -222,6 +264,15 @@ export class DeviceMenuCapture {
         features: ['대시보드', '현황 요약'],
       },
       {
+        id: 'epp-detection',
+        name: 'Detection and Response',
+        path: ['Detection and Response'],
+        children: [
+          { id: 'epp-security-events', name: 'Security Events', path: ['Detection and Response', 'Security Events'], children: [], features: ['보안 이벤트'] },
+        ],
+        features: ['탐지 및 대응'],
+      },
+      {
         id: 'epp-defense',
         name: 'Defense',
         path: ['Defense'],
@@ -232,32 +283,32 @@ export class DeviceMenuCapture {
         features: ['방어', '악성코드 차단'],
       },
       {
+        id: 'epp-endpoints',
+        name: 'Endpoints',
+        path: ['Endpoints'],
+        children: [
+          { id: 'epp-endpoint-inventory', name: 'Endpoint Inventory', path: ['Endpoints', 'Endpoint Inventory'], children: [], features: ['에이전트 목록'] },
+        ],
+        features: ['엔드포인트'],
+      },
+      {
         id: 'epp-policies',
         name: 'Policies',
         path: ['Policies'],
         children: [
           { id: 'epp-app-control', name: 'App Control', path: ['Policies', 'App Control'], children: [], features: ['소프트웨어 제어'] },
-          { id: 'epp-behavior-control', name: 'Behavior Control', path: ['Policies', 'Behavior Control'], children: [], features: ['장치 제어', 'USB 차단'] },
+          { id: 'epp-usb-control', name: 'USB Device Control', path: ['Policies', 'USB Device Control'], children: [], features: ['장치 제어', 'USB 차단'] },
           { id: 'epp-exceptions', name: 'Exceptions', path: ['Policies', 'Exceptions'], children: [], features: ['예외 처리'] },
         ],
         features: ['정책 관리'],
-      },
-      {
-        id: 'epp-assets',
-        name: 'Assets',
-        path: ['Assets'],
-        children: [
-          { id: 'epp-endpoint-list', name: 'Endpoint/Agent List', path: ['Assets', 'Endpoint/Agent List'], children: [], features: ['에이전트 목록'] },
-        ],
-        features: ['자산 관리'],
       },
       {
         id: 'epp-system',
         name: 'System',
         path: ['System'],
         children: [
-          { id: 'epp-update', name: 'Update Management', path: ['System', 'Update Management'], children: [], features: ['업데이트 관리'] },
-          { id: 'epp-syslog', name: 'Syslog', path: ['System', 'Syslog'], children: [], features: ['로그 설정'] },
+          { id: 'epp-agent-deploy', name: 'Agent Deployment', path: ['System', 'Agent Deployment'], children: [], features: ['에이전트 배포'] },
+          { id: 'epp-syslog', name: 'Syslog Reporting', path: ['System', 'Syslog Reporting'], children: [], features: ['로그 설정'] },
         ],
         features: ['시스템 관리'],
       },

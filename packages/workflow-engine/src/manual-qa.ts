@@ -49,6 +49,52 @@ export interface MenuItem {
 
 // ─── 메뉴얼 QA 시스템 ──────────────────────────────────────────────────────
 
+interface BuiltinAnswer {
+  pattern: RegExp;
+  products?: string[];
+  answer: string;
+  source: string;
+  score: number;
+}
+
+const SANGFOR_BUILTIN_ANSWERS: BuiltinAnswer[] = [
+  {
+    pattern: /usb|device control|storage media/i,
+    products: ['EPP', 'ENDPOINT_SECURE'],
+    answer: 'EPP USB/저장매체 제어는 Policies > General Policies > Endpoint Control > USB Device Control 메뉴에서 정책을 설정합니다. 허용/차단 목록과 예외 장치를 정의한 뒤 정책을 배포하세요.',
+    source: 'Sangfor EPP Admin Guide',
+    score: 0.88,
+  },
+  {
+    pattern: /malware|anti.?virus|scan/i,
+    products: ['EPP', 'ENDPOINT_SECURE'],
+    answer: '악성코드 검사는 Defense > Malware Scan에서 스캔 정책과 예약 검사를 구성합니다. 엔진 업데이트 상태는 System > Update Management에서 확인합니다.',
+    source: 'Sangfor EPP Admin Guide',
+    score: 0.86,
+  },
+  {
+    pattern: /app control|software control|unauthorized/i,
+    products: ['EPP', 'ENDPOINT_SECURE'],
+    answer: '미승인 소프트웨어 통제는 Policies > App Control에서 허용/차단 애플리케이션 목록을 정의합니다.',
+    source: 'Sangfor EPP Admin Guide',
+    score: 0.85,
+  },
+  {
+    pattern: /url|internet|web filter|dlp/i,
+    products: ['IAG'],
+    answer: 'IAG URL/인터넷 정책은 Policy > URL/Application Control 또는 Policy > Access Control에서 설정합니다.',
+    source: 'Sangfor IAG Admin Guide',
+    score: 0.84,
+  },
+  {
+    pattern: /agent|deploy|endpoint/i,
+    products: ['EPP', 'ENDPOINT_SECURE'],
+    answer: '에이전트 배포는 System > Agent Deployment에서 패키지 생성 및 배포 대상 그룹을 지정합니다. Endpoint Inventory에서 온라인/오프라인 상태를 확인합니다.',
+    source: 'Sangfor EPP Admin Guide',
+    score: 0.83,
+  },
+];
+
 export class ManualQASystem {
   private ragSearch: (query: string, product?: string) => Promise<any[]>;
   private manualIndex: Map<string, any[]> = new Map();
@@ -62,7 +108,14 @@ export class ManualQASystem {
     log.info(`Question: ${query.question} (product: ${query.product || 'all'})`);
 
     // RAG 검색
-    const searchResults = await this.ragSearch(query.question, query.product);
+    let searchResults = await this.ragSearch(query.question, query.product);
+
+    if (searchResults.length === 0) {
+      const builtin = this.findBuiltinAnswer(query);
+      if (builtin) {
+        searchResults = [builtin];
+      }
+    }
 
     // 답변 생성
     const answer = this.generateAnswer(query, searchResults);
@@ -128,6 +181,20 @@ export class ManualQASystem {
   }
 
   // ─── 내부 메서드 ──────────────────────────────────────────────────────────
+
+  private findBuiltinAnswer(query: ManualQuery): { content: string; score: number; metadata: Record<string, string> } | null {
+    const product = query.product?.toUpperCase();
+    for (const entry of SANGFOR_BUILTIN_ANSWERS) {
+      if (!entry.pattern.test(query.question)) continue;
+      if (entry.products && product && !entry.products.includes(product)) continue;
+      return {
+        content: entry.answer,
+        score: entry.score,
+        metadata: { source: entry.source, section: 'builtin' },
+      };
+    }
+    return null;
+  }
 
   private generateAnswer(query: ManualQuery, searchResults: any[]): ManualAnswer {
     const sources: ManualSource[] = searchResults.map(r => ({

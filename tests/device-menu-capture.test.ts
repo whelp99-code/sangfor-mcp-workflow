@@ -26,17 +26,21 @@ describe('Device menu capture helpers', () => {
     const manualMenus = capture.getReferenceManualMenus('EPP');
     const deviceMenus = parseMcpMenuRoutes([
       'Dashboard (Home)',
+      'Detection and Response > Security Events',
       'Defense > Malware Scan',
+      'Endpoints > Endpoint Inventory',
       'Policies > App Control',
       'Policies > General Policies > Endpoint Control > USB Device Control',
       'System > Agent Deployment',
+      'System > Data Sync > Syslog Reporting',
     ]);
 
     const { accuracy, matchedItems } = computeMenuAccuracy(manualMenus, deviceMenus);
 
-    expect(accuracy).toBeGreaterThan(0);
+    expect(accuracy).toBeGreaterThanOrEqual(50);
     expect(matchedItems).toContain('Malware Scan');
     expect(matchedItems).toContain('App Control');
+    expect(matchedItems).toContain('USB Device Control');
   });
 });
 
@@ -58,6 +62,9 @@ describe('TemplateManager', () => {
     expect(workflow).not.toBeNull();
     expect(workflow!.steps.length).toBe(7);
     expect(workflow!.steps.map((s) => s.toolName)).toContain('import_excel');
+    expect(workflow!.steps.find((s) => s.toolName === 'import_excel')?.toolArgs).toMatchObject({
+      filePath: './test-data/checklist.xlsx',
+    });
   });
 
   it('returns null for legacy short template ids', async () => {

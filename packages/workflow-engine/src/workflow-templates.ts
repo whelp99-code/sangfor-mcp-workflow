@@ -4,6 +4,7 @@
 
 import { nowId, nowISO, createLogger } from '@sangfor/workflow-shared';
 import type { WorkflowTemplate, Workflow, CustomerProfile, ProductCode } from './types.js';
+import { buildWorkflowToolArgs } from './workflow-tool-args.js';
 
 const log = createLogger('workflow-templates');
 
@@ -156,7 +157,7 @@ export class TemplateManager {
         name: step.toolName,
         description: `${step.toolName} 실행`,
         toolName: step.toolName,
-        toolArgs: {},
+        toolArgs: buildWorkflowToolArgs(step.toolName, customerProfile),
         dependsOn: [],
         optional: step.optional || false,
         retryPolicy: {

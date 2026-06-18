@@ -4,6 +4,7 @@
 
 import { nowId, nowISO, createLogger } from '@sangfor/workflow-shared';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const log = createLogger('compliance-tracker');
 
@@ -175,6 +176,10 @@ export class ComplianceTracker {
   // 디스크 영속화
   private persistToDisk(): void {
     try {
+      const dir = dirname(this.dataPath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
       const data = Object.fromEntries(this.records);
       writeFileSync(this.dataPath, JSON.stringify(data, null, 2));
     } catch (error) {

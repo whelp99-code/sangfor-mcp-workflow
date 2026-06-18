@@ -15,6 +15,7 @@ import type {
   ProductCode,
 } from './types.js';
 import { ToolRegistry, createDefaultToolDefinitions, WORKFLOW_TOOL_NAMES } from './tool-registry.js';
+import { buildWorkflowToolArgs } from './workflow-tool-args.js';
 import { DependencyAnalyzer } from './dependency-analyzer.js';
 import { LLMClient, getLLMClient, type ChatMessage } from './llm-client.js';
 
@@ -280,7 +281,7 @@ Respond with JSON only.`;
         name: tool.description,
         description: `${tool.description} 실행`,
         toolName: tool.name,
-        toolArgs: this.generateDefaultArgs(tool, profile),
+        toolArgs: buildWorkflowToolArgs(tool.name, profile),
         dependsOn: deps,
         optional: !tool.requiresApproval,
         retryPolicy: { maxRetries: 2, backoff: 'exponential', retryOn: ['timeout', 'error'] },
@@ -413,7 +414,7 @@ Respond with JSON only.`;
         name: tool.description,
         description: `${tool.description} 실행`,
         toolName: tool.name,
-        toolArgs: this.generateDefaultArgs(tool, profile),
+        toolArgs: buildWorkflowToolArgs(tool.name, profile),
         dependsOn: deps.map((d) => d.targetTool),
         optional: !tool.requiresApproval,
         retryPolicy: { maxRetries: 2, backoff: 'exponential', retryOn: ['timeout', 'error'] },
@@ -423,38 +424,7 @@ Respond with JSON only.`;
   }
 
   private generateDefaultArgs(tool: ToolDefinition, profile: CustomerProfile): Record<string, any> {
-    const args: Record<string, any> = {};
-    switch (tool.name) {
-      case 'import_excel':
-        args.filePath = profile.metadata.excelFilePath || '';
-        break;
-      case 'analyze_requirements':
-        args.requirements = profile.requirements.map((r) => r.text);
-        args.products = profile.products;
-        break;
-      case 'generate_change_plan':
-        args.products = profile.products;
-        args.customerName = profile.customerName;
-        break;
-      case 'capture_screenshots':
-        args.products = profile.products;
-        break;
-      case 'generate_evidence_report':
-        args.customerName = profile.customerName;
-        break;
-      case 'search_manuals':
-        args.product = profile.products[0] ?? 'IAG';
-        args.query = profile.requirements.map((r) => r.text).join(' ');
-        break;
-      case 'run_health_check':
-        args.product = profile.products[0] ?? 'IAG';
-        break;
-      case 'generate_setting_guide_docx':
-      case 'generate_setting_guide_pptx':
-        args.filePath = profile.metadata.excelFilePath || '';
-        break;
-    }
-    return args;
+    return buildWorkflowToolArgs(tool.name, profile);
   }
 
   // LLM 상태 확인

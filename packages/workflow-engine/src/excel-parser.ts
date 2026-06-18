@@ -114,8 +114,9 @@ export function analyzeExcelData(rows: ExcelRow[]): ParseResult {
 // ─── Excel 파일 읽기 ────────────────────────────────────────────────────────
 
 export async function parseExcelFile(filePath: string): Promise<ParseResult> {
+  type XlsxModule = typeof import('xlsx');
   const xlsxMod = await import('xlsx');
-  const XLSX = (xlsxMod as { default?: typeof xlsxMod }).default ?? xlsxMod;
+  const XLSX = ((xlsxMod as unknown) as { default?: XlsxModule }).default ?? (xlsxMod as XlsxModule);
   const wb = XLSX.readFile(filePath);
   const ws = wb.Sheets[wb.SheetNames[0]];
   const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
