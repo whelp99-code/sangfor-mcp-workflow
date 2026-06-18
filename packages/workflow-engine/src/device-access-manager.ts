@@ -147,6 +147,13 @@ export class DeviceAccessManager {
     return this.requests.get(requestId) || null;
   }
 
+  // 전체 요청 조회
+  getAllRequests(): DeviceAccessRequest[] {
+    return Array.from(this.requests.values()).sort(
+      (a, b) => new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime(),
+    );
+  }
+
   // 고객의 모든 요청 조회
   getCustomerRequests(customer: string): DeviceAccessRequest[] {
     const requests: DeviceAccessRequest[] = [];

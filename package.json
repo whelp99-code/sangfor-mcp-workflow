@@ -6,7 +6,7 @@
   "packageManager": "pnpm@10.12.4",
   "scripts": {
     "dev:mcp": "tsx apps/mcp-server/src/index.ts",
-    "dev:web": "tsx apps/operator-console/src/server.ts",
+    "dev:web": "tsx -r dotenv/config apps/operator-console/src/server.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . --ext .ts",

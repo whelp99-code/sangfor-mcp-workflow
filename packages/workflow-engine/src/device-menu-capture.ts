@@ -59,7 +59,6 @@ export class DeviceMenuCapture {
   async captureMenuStructure(config: DeviceMenuCaptureConfig): Promise<CapturedMenu> {
     log.info(`Capturing menu structure: ${config.product} at ${config.targetUrl}`);
 
-    // TODO: sangfor-engineer-mcp의 capture_screenshots 연동
     const captured: CapturedMenu = {
       id: nowId('capture'),
       product: config.product,
@@ -306,5 +305,17 @@ export class DeviceMenuCapture {
     }
 
     return lines.join('\n');
+  }
+
+  /** 메뉴얼 기준(reference) 메뉴 트리 */
+  getReferenceManualMenus(product: 'EPP' | 'IAG' | 'CC'): MenuNode[] {
+    switch (product) {
+      case 'EPP':
+        return this.getEPPMenuStructure();
+      case 'IAG':
+        return this.getIAGMenuStructure();
+      case 'CC':
+        return this.getCCMenuStructure();
+    }
   }
 }

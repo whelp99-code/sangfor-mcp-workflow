@@ -30,6 +30,14 @@ export interface McpToolCall {
 
 // ─── MCP Stdio 클라이언트 ───────────────────────────────────────────────────
 
+export interface McpSpawnOptions {
+  cwd?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  requestTimeoutMs?: number;
+}
+
 export class McpStdioClient {
   private process: ChildProcess | null = null;
   private pendingRequests: Map<string | number, {
@@ -38,10 +46,12 @@ export class McpStdioClient {
   }> = new Map();
   private buffer: string = '';
   private serverPath: string;
+  private spawnOptions: McpSpawnOptions;
   private initialized: boolean = false;
 
-  constructor(serverPath: string) {
+  constructor(serverPath: string, spawnOptions: McpSpawnOptions = {}) {
     this.serverPath = serverPath;
+    this.spawnOptions = spawnOptions;
   }
 
   // 서버 시작
@@ -51,11 +61,16 @@ export class McpStdioClient {
       return;
     }
 
-    log.info(`Starting MCP server: ${this.serverPath}`);
+    const command = this.spawnOptions.command ?? 'npx';
+    const args = this.spawnOptions.args ?? ['tsx', this.serverPath];
+    const cwd = this.spawnOptions.cwd ?? process.cwd();
 
-    this.process = spawn('npx', ['tsx', this.serverPath], {
+    log.info(`Starting MCP server: ${command} ${args.join(' ')} (cwd: ${cwd})`);
+
+    this.process = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: process.cwd(),
+      cwd,
+      env: { ...process.env, ...this.spawnOptions.env },
     });
 
     this.process.stdout?.on('data', (data: Buffer) => {
@@ -162,13 +177,13 @@ export class McpStdioClient {
       const data = JSON.stringify(request) + '\n';
       this.process.stdin.write(data);
 
-      // 타임아웃 (60초)
+      const timeoutMs = this.spawnOptions.requestTimeoutMs ?? 600_000;
       setTimeout(() => {
         if (this.pendingRequests.has(request.id)) {
           this.pendingRequests.delete(request.id);
           reject(new Error(`Request timeout: ${request.method}`));
         }
-      }, 60000);
+      }, timeoutMs);
     });
   }
 

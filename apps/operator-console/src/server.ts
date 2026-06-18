@@ -7,16 +7,26 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import { timingSafeEqual } from 'crypto';
 import { join, dirname } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { config as loadEnv } from 'dotenv';
 import { createLogger } from '@sangfor/workflow-shared';
 import { healthRoutes } from './routes/index.js';
 import { apiKeyAuth } from './middleware/auth.js';
+import {
+  bootstrapMcpClient,
+  getProductEnv,
+  toDeviceProduct,
+  toGuideProduct,
+} from './bootstrap/mcp-bootstrap.js';
+import { buildComplianceAnalysis, buildComplianceRecord } from './services/compliance-helpers.js';
+
+loadEnv();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const WORKFLOW_ROOT = join(__dirname, '../../..');
 import {
   ToolRegistry,
   createDefaultToolDefinitions,
@@ -30,7 +40,6 @@ import {
   ComplianceTracker,
   RoadmapGenerator,
   ProposalGenerator,
-  SangforAutoConfig,
   DeviceAccessManager,
   DeviceMenuCapture,
   SettingGuideGenerator,
@@ -38,8 +47,8 @@ import {
   ReportGenerator,
   WebCrawler,
   RAGIndexer,
-  AIFeatureExtractor,
   LearningScheduler,
+  ManualQASystem,
   BreakGlassPolicy,
   createDefaultAutopilotPolicy,
   OperationOrchestrator,
@@ -47,8 +56,13 @@ import {
   IncidentDetector,
   RemediationPlanner,
   PlaybookRegistry,
+  parseExcelFile,
   type Workflow,
   type RiskLevel,
+  type ComplianceAnalysis,
+  type CapturedMenu,
+  type MenuNode,
+  type McpStdioClient,
 } from '@sangfor/workflow-engine';
 
 const log = createLogger('operator-console');
@@ -88,41 +102,112 @@ workflowExecutor.setBreakGlassPolicy(breakGlassPolicy);
 const complianceTracker = new ComplianceTracker();
 const roadmapGenerator = new RoadmapGenerator();
 const proposalGenerator = new ProposalGenerator();
-const sangforAutoConfig = new SangforAutoConfig();
 const deviceAccessManager = new DeviceAccessManager();
 const deviceMenuCapture = new DeviceMenuCapture();
 const settingGuideGenerator = new SettingGuideGenerator();
 const vendorDB = JSON.parse(
-  readFileSync(join(__dirname, '../../../data/vendors/vendor-database.json'), 'utf8'),
+  readFileSync(join(WORKFLOW_ROOT, 'data/vendors/vendor-database.json'), 'utf8'),
 );
 const vendorComparator = new VendorComparator(vendorDB);
 const reportGenerator = new ReportGenerator();
 const webCrawler = new WebCrawler();
 const ragIndexer = new RAGIndexer();
-const aiFeatureExtractor = new AIFeatureExtractor();
 const learningScheduler = new LearningScheduler();
+
+let mcpClient: McpStdioClient | null = null;
+let mcpConnected = false;
+
+const manualQA = new ManualQASystem(async (query, product) => {
+  if (mcpClient?.isConnected()) {
+    try {
+      const mcpResult = await mcpClient.callTool('sangfor.search_manuals', {
+        query,
+        product,
+      });
+      if (Array.isArray(mcpResult?.results)) {
+        return mcpResult.results.map((item: { content?: string; score?: number; metadata?: Record<string, string> }) => ({
+          content: item.content ?? String(item),
+          score: item.score ?? 0.7,
+          metadata: item.metadata ?? {},
+        }));
+      }
+    } catch (error) {
+      log.warn(`MCP manual search failed: ${error}`);
+    }
+  }
+  const results = await ragIndexer.search(query, { product, limit: 5 });
+  return results.map((r) => ({
+    content: r.chunk.content,
+    score: r.score,
+    metadata: { source: r.document.title, section: r.document.product },
+  }));
+});
+
+const latestComplianceByCustomer = new Map<string, ComplianceAnalysis>();
+const lastDeviceCaptures = new Map<string, CapturedMenu>();
+
+if (learningScheduler.getSchedules().length === 0) {
+  learningScheduler.registerSchedule({
+    name: 'Daily Crawl',
+    frequency: 'daily',
+    vendors: ['CrowdStrike', 'Microsoft'],
+    enabled: true,
+  });
+  learningScheduler.registerSchedule({
+    name: 'Weekly Index',
+    frequency: 'weekly',
+    vendors: ['SentinelOne', 'Palo Alto Networks', 'Fortinet'],
+    enabled: true,
+  });
+}
 
 // 워크플로우 저장소
 const workflows = new Map<string, Workflow>();
 
 // ─── REST API ──────────────────────────────────────────────────────────────
 
-// 공개 엔드포인트 (인증 불필요)
-app.get("/api/system/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+app.get('/api/config', (_req, res) => {
+  res.json({
+    authRequired: true,
+    mcpConnected,
+    authConfigured: Boolean(process.env.SANGFOR_API_KEY),
+  });
+});
+
+app.get('/api/system/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    mcpConnected,
+    authConfigured: Boolean(process.env.SANGFOR_API_KEY),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // 보호 엔드포인트 (인증 필요)
-app.use("/api/devices/health", apiKeyAuth, healthRoutes);
-app.use("/api/workflows", apiKeyAuth);
-app.use("/api/compliance", apiKeyAuth);
-app.use("/api/templates", apiKeyAuth);
-app.use("/api/manual", apiKeyAuth);
-app.use("/api/device", apiKeyAuth);
-app.use("/api/guide", apiKeyAuth);
-app.use("/api/vendors", apiKeyAuth);
-app.use("/api/learning", apiKeyAuth);
-app.use("/api/access", apiKeyAuth);
+app.use('/api/devices/health', apiKeyAuth, healthRoutes);
+app.use('/api/workflows', apiKeyAuth);
+app.use('/api/compliance', apiKeyAuth);
+app.use('/api/templates', apiKeyAuth);
+app.use('/api/manual', apiKeyAuth);
+app.use('/api/device', apiKeyAuth);
+app.use('/api/guide', apiKeyAuth);
+app.use('/api/vendors', apiKeyAuth);
+app.use('/api/learning', apiKeyAuth);
+app.use('/api/access', apiKeyAuth);
+
+for (const autoOpsPath of [
+  '/api/snapshots',
+  '/api/plan',
+  '/api/approvals',
+  '/api/execute',
+  '/api/evidence',
+  '/api/breakglass',
+  '/api/incidents',
+  '/api/remediation',
+]) {
+  app.use(autoOpsPath, apiKeyAuth);
+}
 
 // 대시보드 통계
 app.get("/api/dashboard/stats", (req, res) => {
@@ -260,6 +345,17 @@ app.get('/api/workflows/:id/logs', (req, res) => {
   res.json(logs);
 });
 
+// Excel 업로드 (워크플로우 생성용)
+app.post('/api/workflows/upload-excel', upload.single('excel'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Excel file required' });
+  }
+  res.json({
+    filePath: req.file.path,
+    originalName: req.file.originalname,
+  });
+});
+
 // 템플릿 목록
 app.get('/api/templates', (req, res) => {
   const templates = [
@@ -287,212 +383,453 @@ app.get('/api/templates/search', (req, res) => {
 
 // ─── Compliance API ────────────────────────────────────────────────────────
 
-// Compliance 추적
 app.post('/api/compliance/track', upload.single('excel'), async (req, res) => {
   try {
-    const { customer } = req.body;
+    const customer = req.body.customer || 'Unknown';
     const excelPath = req.file?.path;
-
     if (!excelPath) {
       return res.status(400).json({ error: 'Excel file required' });
     }
 
-    // 샘플 결과 반환
-    const result = {
-      complianceRate: 26,
-      totalItems: 31,
-      missingItems: ['USB Blocking', 'Application Control', 'Web Filtering'],
+    const parseResult = await parseExcelFile(excelPath);
+    const analysis = buildComplianceAnalysis(customer, parseResult);
+    latestComplianceByCustomer.set(customer, analysis);
+    complianceTracker.saveRecord(buildComplianceRecord(customer, analysis, excelPath));
+
+    const missingItems = analysis.items.filter((item) => item.result < 1).map((item) => item.item);
+
+    res.json({
+      complianceRate: analysis.currentCompliance,
+      totalItems: analysis.totalItems,
+      passedItems: analysis.passedItems,
+      missingItems,
       customer,
-      trackedAt: new Date().toISOString(),
-    };
-    res.json(result);
+      products: parseResult.products,
+      trackedAt: analysis.date,
+    });
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
 });
 
-// Compliance 추이 조회
 app.get('/api/compliance/trend', (req, res) => {
-  const { customer } = req.query;
-  const trend = {
-    customer,
-    trend: 'increasing',
-    records: [
-      { date: '2024-01', rate: 26 },
-      { date: '2024-02', rate: 32 },
-      { date: '2024-03', rate: 45 },
-      { date: '2024-04', rate: 62 },
-      { date: '2024-05', rate: 78 },
-      { date: '2024-06', rate: 87 },
-    ],
-  };
-  res.json(trend);
+  const customer = String(req.query.customer ?? '');
+  if (!customer) {
+    return res.status(400).json({ error: 'customer query parameter required' });
+  }
+
+  const trend = complianceTracker.getTrend(customer, 'ALL');
+  res.json({
+    customer: trend.customer,
+    trend: trend.trend === 'improving' ? 'increasing' : trend.trend === 'declining' ? 'decreasing' : 'stable',
+    records: trend.records.map((record) => ({
+      date: record.date.slice(0, 7),
+      rate: record.compliance,
+    })),
+    summary: trend.summary,
+  });
 });
 
-// 개선 로드맵 생성
 app.post('/api/compliance/roadmap', (req, res) => {
-  const { currentCompliance, targetCompliance } = req.body;
-  const roadmap = {
-    currentCompliance,
-    targetCompliance,
-    phases: [
-      { name: 'Phase 1', duration: '2주', items: ['EPP 설정', '기본 보안 정책'], estimatedCompliance: 45 },
-      { name: 'Phase 2', duration: '3주', items: ['IAG 설정', '네트워크 보안'], estimatedCompliance: 65 },
-      { name: 'Phase 3', duration: '4주', items: ['CC 설정', '모니터링'], estimatedCompliance: 87 },
-    ],
-    estimatedCompliance: targetCompliance,
-  };
-  res.json(roadmap);
+  const { customerName, currentCompliance, targetCompliance } = req.body;
+  const customer = customerName ?? 'Customer';
+  let analysis = latestComplianceByCustomer.get(customer);
+  if (!analysis) {
+    const current = Number(currentCompliance) || 26;
+    analysis = {
+      customer,
+      product: 'ALL',
+      date: new Date().toISOString(),
+      totalItems: 100,
+      passedItems: current,
+      partiallyPassed: 0,
+      failedItems: 100 - current,
+      currentCompliance: current,
+      potentialCompliance: 100,
+      improvementOpportunity: 100 - current,
+      items: [],
+    };
+  }
+
+  const roadmap = roadmapGenerator.generateRoadmap(customer, analysis, targetCompliance ?? 87);
+  res.json({
+    currentCompliance: roadmap.currentCompliance,
+    targetCompliance: roadmap.targetCompliance,
+    phases: roadmap.phases.map((phase) => ({
+      name: `Phase ${phase.phase}: ${phase.title}`,
+      duration: phase.timeline,
+      items: phase.items,
+      estimatedCompliance: phase.expectedCompliance,
+    })),
+    estimatedCompliance: roadmap.targetCompliance,
+    estimatedDuration: roadmap.estimatedDuration,
+    estimatedCost: roadmap.estimatedCost,
+    summary: roadmap.summary,
+  });
 });
 
-// 고객 제안서 생성
 app.post('/api/compliance/proposal', (req, res) => {
   const { customerName, targetCompliance } = req.body;
-  const proposal = {
-    title: `${customerName} 보안 강화 제안서`,
-    customerName,
-    targetCompliance,
-    totalCost: 50000,
+  if (!customerName) {
+    return res.status(400).json({ error: 'customerName required' });
+  }
+
+  let analysis = latestComplianceByCustomer.get(customerName);
+  if (!analysis) {
+    analysis = {
+      customer: customerName,
+      product: 'ALL',
+      date: new Date().toISOString(),
+      totalItems: 31,
+      passedItems: 8,
+      partiallyPassed: 0,
+      failedItems: 23,
+      currentCompliance: 26,
+      potentialCompliance: 100,
+      improvementOpportunity: 74,
+      items: [],
+    };
+  }
+
+  const roadmap = roadmapGenerator.generateRoadmap(customerName, analysis, targetCompliance ?? 87);
+  const proposal = proposalGenerator.generate(customerName, analysis, roadmap);
+
+  res.json({
+    title: proposal.title,
+    customerName: proposal.customer,
+    targetCompliance: roadmap.targetCompliance,
+    totalCost: proposal.totalCost,
+    timeline: proposal.timeline,
     sections: [
-      { title: '현황 분석', content: '현재 Compliance 26%' },
-      { title: '목표', content: `Compliance ${targetCompliance}% 달성` },
-      { title: '솔루션', content: 'Sangfor EPP + IAG + CC' },
-      { title: '비용', content: '$50,000' },
+      { title: '현황 분석', content: `현재 Compliance ${proposal.currentStatus.currentCompliance}%` },
+      { title: '목표', content: `Compliance ${roadmap.targetCompliance}% 달성` },
+      { title: '솔루션', content: proposal.sangforProducts.map((p) => p.product).join(', ') },
+      { title: '비용', content: proposal.totalCost },
     ],
-  };
-  res.json(proposal);
+    markdown: proposalGenerator.generateMarkdown(proposal),
+  });
 });
 
 // ─── Manual QA API ─────────────────────────────────────────────────────────
 
-// 메뉴얼 질문
 app.post('/api/manual/ask', async (req, res) => {
-  const { question } = req.body;
-  const answer = {
-    question,
-    answer: `"${question}"에 대한 답변입니다. Sangfor 제품 매뉴얼에서 검색한 결과입니다.`,
-    source: 'Sangfor Knowledge Base',
-    confidence: 0.85,
-  };
-  res.json(answer);
+  try {
+    const { question, product } = req.body;
+    const answer = await manualQA.askQuestion({ question, product });
+    res.json({
+      question: answer.question,
+      answer: answer.answer,
+      source: answer.sources[0]?.document ?? 'Knowledge Base',
+      confidence: answer.confidence,
+      sources: answer.sources,
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
-// 메뉴 경로 조회
 app.post('/api/manual/menu-path', async (req, res) => {
-  const { product, feature } = req.body;
-  const path = {
-    product,
-    feature,
-    path: `Settings > Security > ${feature}`,
-    version: 'latest',
-  };
-  res.json(path);
+  try {
+    const { product, feature } = req.body;
+    const deviceProduct = toDeviceProduct(product);
+    let segments = await manualQA.findMenuPath(product, feature);
+
+    if (segments.length === 0) {
+      const reference = deviceMenuCapture.getReferenceManualMenus(deviceProduct);
+      const match = reference.find(
+        (menu) =>
+          menu.name.toLowerCase().includes(String(feature).toLowerCase())
+          || menu.features?.some((f) => String(feature).toLowerCase().includes(f.toLowerCase())),
+      );
+      segments = match?.path ?? ['Settings', 'Security', feature];
+    }
+
+    res.json({
+      product,
+      feature,
+      path: segments.join(' > '),
+      segments,
+      version: 'latest',
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
 // ─── Device Menu API ───────────────────────────────────────────────────────
 
-// 실장비 메뉴 캡처
-app.post('/api/device/capture-menu', async (req, res) => {
-  const { product, cdpPort } = req.body;
-  const menu = {
-    product,
+async function captureDeviceMenuInternal(
+  productCode: string,
+  cdpPort?: number,
+): Promise<CapturedMenu & { menuItems: string[]; captureSource: string; mcpDetails?: unknown }> {
+  const deviceProduct = toDeviceProduct(productCode);
+  const cfg = getProductEnv(deviceProduct);
+
+  if (mcpClient?.isConnected()) {
+    if (!cfg.password) {
+      throw new Error(`${deviceProduct}_PASSWORD가 .env에 설정되어 있지 않습니다.`);
+    }
+    mkdirSync(cfg.outputDir, { recursive: true });
+
+    const captureResult = await mcpClient.callTool('sangfor.capture_screenshots', {
+      product: deviceProduct,
+      targetUrl: cfg.targetUrl,
+      username: cfg.username,
+      password: cfg.password,
+      outputDir: cfg.outputDir,
+      headless: false,
+      cdpPort,
+    });
+
+    const discoverResult = await mcpClient.callTool('sangfor.discover_product_console', {
+      product: deviceProduct,
+      targetUrl: cfg.targetUrl,
+      environment: 'lab',
+    });
+
+    const menuRoutes = discoverResult?.menuRoutes ?? [];
+    const menus: MenuNode[] = menuRoutes.map((route: { name?: string; path?: string[] }, index: number) => ({
+      id: `mcp-menu-${index}`,
+      name: route.name ?? `Menu ${index + 1}`,
+      path: route.path ?? [route.name ?? `Menu ${index + 1}`],
+      children: [],
+      features: [],
+      screenshotPath: captureResult?.captured?.find?.(
+        (c: { menu?: string }) => c.menu === route.name,
+      )?.path,
+    }));
+
+    const captured: CapturedMenu & { menuItems: string[]; captureSource: string; mcpDetails?: unknown } = {
+      id: `capture_${Date.now()}`,
+      product: deviceProduct,
+      version: discoverResult?.version ?? '',
+      capturedAt: new Date().toISOString(),
+      menus,
+      screenshotPaths: (captureResult?.captured ?? []).map((c: { path?: string }) => c.path).filter(Boolean),
+      menuItems: menus.map((m) => m.name),
+      captureSource: 'mcp',
+      mcpDetails: { capture: captureResult, discover: discoverResult },
+    };
+
+    lastDeviceCaptures.set(deviceProduct, captured);
+    return captured;
+  }
+
+  const captured = await deviceMenuCapture.captureMenuStructure({
+    product: deviceProduct,
+    targetUrl: cfg.targetUrl,
+    credentials: { username: cfg.username, password: cfg.password },
     cdpPort,
-    menuItems: ['Dashboard', 'Policy', 'Network', 'System', 'Log', 'Report'],
-    capturedAt: new Date().toISOString(),
+  });
+
+  const withMeta = {
+    ...captured,
+    menuItems: captured.menus.map((menu) => menu.name),
+    captureSource: 'reference',
   };
-  res.json(menu);
+  lastDeviceCaptures.set(deviceProduct, withMeta);
+  return withMeta;
+}
+
+app.post('/api/device/capture-menu', async (req, res) => {
+  try {
+    const { product, cdpPort } = req.body;
+    const captured = await captureDeviceMenuInternal(product, cdpPort);
+    res.json({
+      product,
+      cdpPort,
+      menuItems: captured.menuItems,
+      menus: captured.menus,
+      screenshotPaths: captured.screenshotPaths,
+      captureSource: captured.captureSource,
+      capturedAt: captured.capturedAt,
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
-// 메뉴얼 vs 실장비 비교
 app.post('/api/device/compare', async (req, res) => {
-  const { product, cdpPort } = req.body;
-  const comparison = {
-    product,
-    matchedItems: ['Dashboard', 'Policy', 'Network', 'System'],
-    missingInDevice: ['Advanced Settings'],
-    extraInDevice: ['Debug Mode'],
-    accuracy: 80,
-  };
-  res.json(comparison);
+  try {
+    const { product, cdpPort } = req.body;
+    const deviceProduct = toDeviceProduct(product);
+    const captured = lastDeviceCaptures.get(deviceProduct)
+      ?? await captureDeviceMenuInternal(product, cdpPort);
+    const manualMenus = deviceMenuCapture.getReferenceManualMenus(deviceProduct);
+    const comparison = await deviceMenuCapture.compareWithManual(captured, manualMenus);
+
+    const matchedItems = manualMenus
+      .filter((menu) => captured.menus.some((deviceMenu) => deviceMenu.name === menu.name))
+      .map((menu) => menu.name);
+    const missingInDevice = comparison.differences
+      .filter((diff) => diff.type === 'removed')
+      .map((diff) => diff.description);
+    const extraInDevice = comparison.differences
+      .filter((diff) => diff.type === 'added')
+      .map((diff) => diff.description);
+    const accuracy = manualMenus.length > 0
+      ? Math.round((matchedItems.length / manualMenus.length) * 100)
+      : 100;
+
+    res.json({
+      product,
+      matchedItems,
+      missingInDevice,
+      extraInDevice,
+      accuracy,
+      summary: comparison.summary,
+      differences: comparison.differences,
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
 // ─── Setting Guide API ─────────────────────────────────────────────────────
 
-// 설정 가이드 생성
 app.post('/api/guide/generate', async (req, res) => {
-  const { customerName, product, requirements } = req.body;
-  const guide = {
-    title: `${customerName} - ${product} 설정 가이드`,
-    customerName,
-    product,
-    requirements,
-    sections: requirements.map((r: string) => ({
-      title: r,
-      path: `Settings > Security > ${r}`,
-      steps: [
-        `${r} 메뉴로 이동`,
-        "정책 활성화",
-        "설정 저장",
-        "테스트 실행",
-      ],
-    })),
-    guide: `# ${customerName} - ${product} 설정 가이드\n\n${requirements.map((r: string) => `## ${r}\n\n1. Settings > Security > ${r}로 이동\n2. 정책 활성화\n3. 설정 저장\n4. 테스트 실행`).join('\n\n')}`,
-  };
-  res.json(guide);
+  try {
+    const { customerName, product, requirements } = req.body;
+    const guideProduct = toGuideProduct(product);
+    const guide = await settingGuideGenerator.generateGuide({
+      customer: customerName,
+      product: guideProduct,
+      requirements,
+    });
+
+    res.json({
+      title: guide.title,
+      customerName: guide.customer,
+      product: guide.product,
+      requirements,
+      sections: guide.sections.map((section) => ({
+        title: section.title,
+        path: section.menuPath.join(' > '),
+        steps: section.steps.map((step) => step.description),
+      })),
+      guide: settingGuideGenerator.generateMarkdown(guide),
+      estimatedTime: guide.estimatedTime,
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
 // ─── Vendor API ────────────────────────────────────────────────────────────
 
-// 벤더 비교
 app.post('/api/vendors/compare', async (req, res) => {
-  const { category, includeSangfor } = req.body;
-  const comparison = {
-    category,
-    includeSangfor,
-    vendors: [
-      { name: 'Sangfor', score: 85, features: ['EPP', 'IAG', 'CC', 'NDR'] },
-      { name: 'CrowdStrike', score: 92, features: ['EDR', 'XDR', 'Threat Intel'] },
-      { name: 'Microsoft', score: 88, features: ['Defender', 'Sentinel', 'Purview'] },
-      { name: 'SentinelOne', score: 90, features: ['EDR', 'XDR', 'Cloud'] },
-    ],
-    topVendor: 'CrowdStrike',
-  };
-  res.json(comparison);
+  try {
+    const { category, includeSangfor, requirement } = req.body;
+    const comparison = vendorComparator.compareByCategory(
+      category,
+      requirement ?? `${category} security requirements`,
+    );
+
+    let vendors = comparison.recommendations.map((rec) => ({
+      name: rec.vendor,
+      product: rec.product,
+      score: rec.fitScore,
+      features: rec.pros,
+      pricing: rec.pricing,
+      reasons: rec.reasons,
+    }));
+
+    if (includeSangfor === false) {
+      vendors = vendors.filter((vendor) => vendor.name !== 'Sangfor');
+    }
+
+    res.json({
+      category: comparison.category,
+      includeSangfor,
+      vendors,
+      topVendor: vendors[0]?.name ?? null,
+      summary: comparison.summary,
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
-// 비교 보고서 생성
 app.post('/api/vendors/report', async (req, res) => {
-  const { customerName, category } = req.body;
-  const report = {
-    title: `${customerName} - ${category} 비교 보고서`,
-    customerName,
-    category,
-    generatedAt: new Date().toISOString(),
-    report: `# ${customerName} - ${category} 비교 보고서\n\n## 벤더 비교\n\n| 벤더 | 점수 | 특징 |\n|------|------|------|\n| Sangfor | 85 | EPP, IAG, CC |\n| CrowdStrike | 92 | EDR, XDR |\n| Microsoft | 88 | Defender, Sentinel |\n\n## 추천\n\nCrowdStrike가 가장 높은 점수를 기록했으나, Sangfor이 한국 시장에 최적화되어 있습니다.`,
-  };
-  res.json(report);
+  try {
+    const { customerName, category } = req.body;
+    if (!customerName || !category) {
+      return res.status(400).json({ error: 'customerName and category required' });
+    }
+
+    const comparison = vendorComparator.compareByCategory(category, `${category} requirements`);
+    const report = reportGenerator.generateComparisonReport({
+      customerName,
+      products: comparison.recommendations.map((rec) => rec.product),
+      requirements: [category],
+      comparisonResults: [comparison],
+      recommendations: comparison.recommendations,
+    });
+
+    res.json({
+      title: report.title,
+      customerName: report.customer,
+      category,
+      generatedAt: report.date,
+      report: reportGenerator.generateCustomGuide({
+        customerName,
+        products: comparison.recommendations.map((rec) => rec.product),
+        requirements: [category],
+        comparisonResults: [comparison],
+        recommendations: comparison.recommendations,
+      }),
+      executiveSummary: report.executiveSummary,
+    });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
 // ─── Learning API ──────────────────────────────────────────────────────────
 
-// 학습 실행
 app.post('/api/learning/run', async (req, res) => {
   const { type } = req.body;
 
   try {
-    let result: any = {};
+    let result: Record<string, unknown> = {};
 
     switch (type) {
-      case 'crawl':
-        result = { status: 'completed', vendorsProcessed: 5, chunksIndexed: 0 };
+      case 'crawl': {
+        const crawlResults = await webCrawler.crawlAllVendors();
+        result = {
+          status: 'completed',
+          vendorsProcessed: crawlResults.size,
+          chunksIndexed: 0,
+        };
         break;
-      case 'index':
+      }
+      case 'index': {
+        let totalChunks = 0;
+        for (const [vendor, results] of webCrawler.getAllResults()) {
+          totalChunks += await ragIndexer.indexVendorData(vendor, results);
+        }
         const stats = ragIndexer.getStats();
-        result = { status: 'completed', chunksIndexed: stats.chunks, documents: stats.documents };
+        result = {
+          status: 'completed',
+          chunksIndexed: stats.chunks,
+          documents: stats.documents,
+          vendorsIndexed: totalChunks,
+        };
         break;
-      case 'full':
-        result = { status: 'completed', vendorsProcessed: 5 };
+      }
+      case 'full': {
+        const crawlResults = await webCrawler.crawlAllVendors();
+        let totalChunks = 0;
+        for (const [vendor, results] of crawlResults) {
+          totalChunks += await ragIndexer.indexVendorData(vendor, results);
+        }
+        result = {
+          status: 'completed',
+          vendorsProcessed: crawlResults.size,
+          chunksIndexed: totalChunks,
+        };
         break;
+      }
       default:
         result = { status: 'unknown type' };
     }
@@ -503,65 +840,113 @@ app.post('/api/learning/run', async (req, res) => {
   }
 });
 
-// 스케줄 목록
-app.get('/api/learning/schedules', (req, res) => {
-  const schedules = [
-    { id: '1', name: 'Daily Crawl', frequency: 'daily', vendors: ['CrowdStrike', 'Microsoft'], enabled: true },
-    { id: '2', name: 'Weekly Index', frequency: 'weekly', vendors: ['All'], enabled: true },
-  ];
-  res.json(schedules);
+app.get('/api/learning/schedules', (_req, res) => {
+  res.json(learningScheduler.getSchedules());
 });
 
-// 스케줄 생성
 app.post('/api/learning/schedules', (req, res) => {
-  const schedule = {
-    id: Date.now().toString(),
-    ...req.body,
-  };
+  const schedule = learningScheduler.registerSchedule(req.body);
   res.json(schedule);
 });
 
-// 스케줄 실행
 app.post('/api/learning/schedules/:id/run', async (req, res) => {
-  const job = {
-    id: Date.now().toString(),
-    scheduleId: req.params.id,
-    status: 'completed',
-    startedAt: new Date().toISOString(),
-    completedAt: new Date().toISOString(),
-  };
-  res.json(job);
+  try {
+    const job = await learningScheduler.runSchedule(req.params.id);
+    res.json(job);
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
 });
 
 // ─── Device Access API ─────────────────────────────────────────────────────
 
-// 접근 요청 생성
 app.post('/api/access/request', (req, res) => {
-  const { customerName, projectName, products } = req.body;
-  const request = {
-    requestId: Date.now().toString(),
-    customerName,
-    projectName,
-    products,
-    status: 'pending',
-    createdAt: new Date().toISOString(),
-    message: `# ${customerName} - 장비 접근 정보 요청\n\n프로젝트: ${projectName}\n\n## 필요한 접근 정보\n\n${products.map((p: string) => `### ${p}\n- IP: [입력 필요]\n- Port: [입력 필요]\n- 계정: [입력 필요]\n- 비밀번호: [입력 필요]`).join('\n\n')}`,
-  };
-  res.json(request);
+  try {
+    const { customerName, projectName, products, requestedBy } = req.body;
+    const productList = (products ?? []).map((p: string) => String(p).trim()).filter(Boolean);
+
+    const request = deviceAccessManager.createRequest({
+      customer: customerName,
+      projectId: projectName,
+      projectName,
+      devices: productList.map((product: string) => ({
+        product: toDeviceProduct(product),
+        purpose: `${projectName} 프로젝트`,
+      })),
+      requestedBy: requestedBy ?? 'operator',
+      requestReason: `${projectName} 장비 접근`,
+      estimatedDuration: '2 weeks',
+    });
+
+    const message = deviceAccessManager.generateRequestMessage({
+      customer: customerName,
+      projectId: projectName,
+      projectName,
+      devices: productList.map((product: string) => ({
+        product: toDeviceProduct(product),
+        purpose: `${projectName} 프로젝트`,
+      })),
+      requestedBy: requestedBy ?? 'operator',
+      requestReason: `${projectName} 장비 접근`,
+      estimatedDuration: '2 weeks',
+    });
+
+    res.json({
+      requestId: request.id,
+      customerName: request.customer,
+      projectName,
+      products: productList,
+      status: request.status,
+      createdAt: request.requestedAt,
+      message,
+    });
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
 });
 
-// 접근 정보 제출
 app.post('/api/access/submit', (req, res) => {
-  const { requestId, product, ip, port, username, password } = req.body;
-  res.json({ ok: true, requestId, product });
+  try {
+    const { requestId, product, ip, port, username, password } = req.body;
+    const deviceProduct = toDeviceProduct(product);
+
+    const validation = deviceAccessManager.validateAccessInfo([{
+      product: deviceProduct,
+      ip,
+      port: Number(port) || 443,
+      username,
+      password,
+      protocol: 'https',
+    }]);
+
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.errors.join(', ') });
+    }
+
+    const updated = deviceAccessManager.submitAccessInfo(requestId, [{
+      product: deviceProduct,
+      ip,
+      port: Number(port) || 443,
+      username,
+      password,
+      protocol: 'https',
+    }]);
+
+    res.json({ ok: true, requestId: updated.id, product: deviceProduct, status: updated.status });
+  } catch (error) {
+    res.status(400).json({ error: String(error) });
+  }
 });
 
-// 접근 요청 목록
-app.get('/api/access/requests', (req, res) => {
-  const requests = [
-    { requestId: '1', customerName: '현대차', projectName: '보안감사', products: ['IAG', 'EPP'], status: 'approved' },
-    { requestId: '2', customerName: '삼성전자', projectName: '보안강화', products: ['CC'], status: 'pending' },
-  ];
+app.get('/api/access/requests', (_req, res) => {
+  const requests = deviceAccessManager.getAllRequests().map((request) => ({
+    requestId: request.id,
+    customerName: request.customer,
+    projectName: request.projectId,
+    products: request.devices.map((device) => device.product),
+    status: request.status,
+    createdAt: request.requestedAt,
+  }));
   res.json(requests);
 });
 
@@ -912,20 +1297,24 @@ app.get('/api/events', (req, res) => {
   });
 });
 
-// ─── System ────────────────────────────────────────────────────────────────
-
-app.get('/api/system/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
-});
-
 // SPA fallback
-app.get('/{*path}', (req, res) => {
+app.get('/{*path}', (_req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
 // ─── 시작 ──────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  log.info(`Operator Console started on port ${PORT}`);
-  console.log(`🚀 Operator Console: http://localhost:${PORT}`);
+async function startServer(): Promise<void> {
+  mcpClient = await bootstrapMcpClient(toolRegistry, WORKFLOW_ROOT);
+  mcpConnected = mcpClient?.isConnected() ?? false;
+
+  app.listen(PORT, () => {
+    log.info(`Operator Console started on port ${PORT} (MCP: ${mcpConnected ? 'connected' : 'stub'})`);
+    console.log(`🚀 Operator Console: http://localhost:${PORT}`);
+  });
+}
+
+startServer().catch((error) => {
+  log.error(`Failed to start server: ${error}`);
+  process.exit(1);
 });

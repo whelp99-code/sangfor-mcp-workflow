@@ -10,7 +10,11 @@
 
     .header { background: #1e293b; padding: 16px 24px; border-bottom: 1px solid #334155; display: flex; align-items: center; gap: 12px; }
     .header h1 { font-size: 20px; font-weight: 600; }
-    .header .badge { background: #22c55e; color: #000; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+    .header .badge { padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; background: #22c55e; color: #000; }
+    .header .badge.warn { background: #eab308; color: #000; }
+    .header .badge.error { background: #ef4444; color: #fff; }
+    .header .badge.mcp { background: #64748b; color: #fff; }
+    .header .badge.mcp.ok { background: #22c55e; color: #000; }
 
     .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
 
@@ -139,7 +143,9 @@
 <body>
   <div class="header">
     <h1>Sangfor MCP Workflow</h1>
-    <span class="badge" id="systemBadge">Healthy</span>
+    <span class="badge" id="systemBadge">Checking...</span>
+    <span class="badge mcp" id="mcpBadge">MCP</span>
+    <button class="btn btn-secondary btn-sm" style="margin-left:8px" onclick="openSettingsModal()">API Key</button>
     <span style="margin-left:auto; font-size:13px; color:#94a3b8;" id="uptime"></span>
   </div>
 
@@ -153,15 +159,16 @@
     </div>
 
     <!-- Navigation Tabs -->
-    <div class="nav-tabs">
-      <button class="nav-tab active" onclick="switchTab('workflows')">Workflows</button>
-      <button class="nav-tab" onclick="switchTab('compliance')">Compliance</button>
-      <button class="nav-tab" onclick="switchTab('manual')">Manual QA</button>
-      <button class="nav-tab" onclick="switchTab('device')">Device Menu</button>
-      <button class="nav-tab" onclick="switchTab('guide')">Setting Guide</button>
-      <button class="nav-tab" onclick="switchTab('vendors')">Vendors</button>
-      <button class="nav-tab" onclick="switchTab('learning')">Learning</button>
-      <button class="nav-tab" onclick="switchTab('access')">Device Access</button>
+    <div class="nav-tabs" id="navTabs">
+      <button class="nav-tab active" data-tab="workflows" onclick="switchTab('workflows', this)">Workflows</button>
+      <button class="nav-tab" data-tab="compliance" onclick="switchTab('compliance', this)">Compliance</button>
+      <button class="nav-tab" data-tab="manual" onclick="switchTab('manual', this)">Manual QA</button>
+      <button class="nav-tab" data-tab="device" onclick="switchTab('device', this)">Device Menu</button>
+      <button class="nav-tab" data-tab="guide" onclick="switchTab('guide', this)">Setting Guide</button>
+      <button class="nav-tab" data-tab="vendors" onclick="switchTab('vendors', this)">Vendors</button>
+      <button class="nav-tab" data-tab="learning" onclick="switchTab('learning', this)">Learning</button>
+      <button class="nav-tab" data-tab="autoops" onclick="switchTab('autoops', this)">Auto Ops</button>
+      <button class="nav-tab" data-tab="access" onclick="switchTab('access', this)">Device Access</button>
     </div>
 
     <!-- Tab: Workflows -->
@@ -429,6 +436,57 @@
       </div>
     </div>
 
+    <!-- Tab: Auto Ops -->
+    <div class="tab-content" id="tab-autoops">
+      <div class="section">
+        <h2>Device Health</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadDeviceHealth()">Refresh</button>
+        <div id="deviceHealthList" style="margin-top:12px"></div>
+      </div>
+
+      <div class="section">
+        <h2>Operation Plan</h2>
+        <div class="grid-2">
+          <div>
+            <label>Product</label>
+            <select id="autoOpsProduct">
+              <option value="EPP">EPP</option>
+              <option value="IAG">IAG</option>
+              <option value="CC">CC</option>
+            </select>
+          </div>
+          <div>
+            <label>Intent</label>
+            <input type="text" id="autoOpsIntent" placeholder="정책 상태 확인">
+          </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="runAutoOpsFlow()">Snapshot → Plan → Execute</button>
+        <div id="autoOpsResult" class="result-box" style="display:none"></div>
+      </div>
+
+      <div class="section">
+        <h2>Pending Approvals</h2>
+        <button class="btn btn-secondary btn-sm" onclick="loadApprovals()">Refresh</button>
+        <div id="approvalsList" style="margin-top:12px"></div>
+      </div>
+
+      <div class="section">
+        <h2>Break-Glass</h2>
+        <div class="grid-2">
+          <div>
+            <label>Reason</label>
+            <input type="text" id="breakglassReason" placeholder="Emergency change">
+          </div>
+          <div>
+            <label>Requested By</label>
+            <input type="text" id="breakglassUser" placeholder="operator">
+          </div>
+        </div>
+        <button class="btn btn-danger btn-sm" style="margin-top:12px" onclick="requestBreakGlass()">Request Break-Glass</button>
+        <div id="breakglassStatus" class="result-box" style="display:none"></div>
+      </div>
+    </div>
+
     <!-- Tab: Device Access -->
     <div class="tab-content" id="tab-access">
       <div class="section">
@@ -551,490 +609,20 @@
     </div>
   </div>
 
-  <script>
-    const API = '';
-    let selectedFile = null;
-
-    // ─── Tab Navigation ──────────────────────────────────────────────────────
-
-    function switchTab(tabName) {
-      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-      document.getElementById('tab-' + tabName).classList.add('active');
-      event.target.classList.add('active');
-    }
-
-    // ─── Dashboard ───────────────────────────────────────────────────────────
-
-    async function loadDashboard() {
-      try {
-        const [stats, workflows, templates] = await Promise.all([
-          fetch(API + '/api/dashboard/stats').then(r => r.json()),
-          fetch(API + '/api/workflows').then(r => r.json()),
-          fetch(API + '/api/templates').then(r => r.json()),
-        ]);
-
-        document.getElementById('totalWorkflows').textContent = stats.totalWorkflows;
-        document.getElementById('completedWorkflows').textContent = stats.completedWorkflows;
-        document.getElementById('runningWorkflows').textContent = stats.runningWorkflows;
-        document.getElementById('totalSteps').textContent = stats.totalStepsExecuted;
-        document.getElementById('uptime').textContent = 'Uptime: ' + stats.uptime;
-
-        const list = document.getElementById('workflowList');
-        list.innerHTML = workflows.map(w => `
-          <div class="workflow-item" onclick="showDetail('${w.id}')">
-            <div class="info">
-              <div class="name">${w.name}</div>
-              <div class="meta">${w.stepsCount || '-'} steps | Progress: ${w.progress}%</div>
-            </div>
-            <span class="status ${w.status}">${w.status}</span>
-          </div>
-        `).join('') || '<div style="color:#64748b; text-align:center; padding:20px;">No workflows yet. Create one!</div>';
-
-        const grid = document.getElementById('templateGrid');
-        grid.innerHTML = templates.map(t => `
-          <div class="template-card" onclick="createFromTemplate('${t.id}')">
-            <div class="name">${t.name}</div>
-            <div class="desc">${t.description}</div>
-            <div class="tags">${t.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}</div>
-          </div>
-        `).join('');
-      } catch (error) {
-        console.error('Dashboard load error:', error);
-      }
-    }
-
-    // ─── Workflow Detail ─────────────────────────────────────────────────────
-
-    async function showDetail(id) {
-      const data = await fetch(API + '/api/workflows/' + id).then(r => r.json());
-      document.getElementById('detailTitle').textContent = data.workflow.name;
-
-      let html = '<div style="margin-bottom:12px"><strong>Status:</strong> <span class="status ' + data.workflow.status + '">' + data.workflow.status + '</span></div>';
-      html += '<div style="margin-bottom:12px"><strong>Customer:</strong> ' + data.workflow.customerProfile.customerName + '</div>';
-      html += '<div style="margin-bottom:12px"><strong>Products:</strong> ' + data.workflow.customerProfile.products.join(', ') + '</div>';
-
-      if (data.workflow.customerProfile.requirements.length > 0) {
-        html += '<div style="margin-bottom:12px"><strong>Requirements:</strong><ul style="margin-top:4px;padding-left:20px">';
-        data.workflow.customerProfile.requirements.forEach(r => {
-          html += '<li style="font-size:13px;color:#94a3b8;margin-top:2px">' + r.text + '</li>';
-        });
-        html += '</ul></div>';
-      }
-
-      html += '<div style="margin-bottom:12px"><strong>Steps:</strong></div>';
-      html += '<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px">';
-      data.workflow.steps.forEach(s => {
-        const icon = s.status === 'completed' ? '✅' : s.status === 'failed' ? '❌' : s.status === 'running' ? '⏳' : '⏸️';
-        html += '<div style="font-size:13px;display:flex;gap:8px;align-items:center"><span>' + icon + '</span><span>' + s.name + '</span></div>';
-      });
-      html += '</div>';
-
-      document.getElementById('detailContent').innerHTML = html;
-
-      let actions = '<button class="btn btn-secondary" onclick="closeDetailModal()">Close</button>';
-      if (data.workflow.status === 'draft') {
-        actions = '<button class="btn btn-success" onclick="approveWorkflow(\'' + id + '\')">Approve</button><button class="btn btn-danger" onclick="rejectWorkflow(\'' + id + '\')">Reject</button>' + actions;
-      } else if (data.workflow.status === 'approved') {
-        actions = '<button class="btn btn-primary" onclick="executeWorkflow(\'' + id + '\')">Execute</button>' + actions;
-      }
-      document.getElementById('detailActions').innerHTML = actions;
-
-      document.getElementById('detailModal').classList.add('active');
-    }
-
-    function openGenerateModal() { document.getElementById('generateModal').classList.add('active'); }
-    function closeModal() {
-      document.getElementById('generateModal').classList.remove('active');
-      document.getElementById('customerName').value = '';
-      document.getElementById('environment').value = 'customer';
-      document.querySelectorAll('input[name="products"]').forEach(cb => cb.checked = false);
-      document.getElementById('fileName').textContent = '';
-      selectedFile = null;
-      document.getElementById('requirementList').innerHTML = `
-        <div class="requirement-item">
-          <input type="text" placeholder="Enter requirement">
-          <button class="btn btn-danger" onclick="removeRequirement(this)">✕</button>
-        </div>
-      `;
-    }
-    function closeDetailModal() { document.getElementById('detailModal').classList.remove('active'); }
-
-    function handleFileSelect(event) {
-      const file = event.target.files[0];
-      if (file) {
-        selectedFile = file;
-        document.getElementById('fileName').textContent = file.name;
-        document.getElementById('fileUpload').classList.add('active');
-      }
-    }
-
-    function addRequirement() {
-      const list = document.getElementById('requirementList');
-      const item = document.createElement('div');
-      item.className = 'requirement-item';
-      item.innerHTML = `
-        <input type="text" placeholder="Enter requirement">
-        <button class="btn btn-danger" onclick="removeRequirement(this)">✕</button>
-      `;
-      list.appendChild(item);
-    }
-
-    function removeRequirement(btn) {
-      const list = document.getElementById('requirementList');
-      if (list.children.length > 1) btn.parentElement.remove();
-    }
-
-    function getRequirements() {
-      return Array.from(document.querySelectorAll('#requirementList input')).map(i => i.value.trim()).filter(Boolean);
-    }
-
-    function getSelectedProducts() {
-      return Array.from(document.querySelectorAll('input[name="products"]:checked')).map(cb => cb.value);
-    }
-
-    async function generateWorkflow() {
-      const name = document.getElementById('customerName').value.trim();
-      if (!name) { alert('Customer name is required'); return; }
-
-      const body = {
-        customerName: name,
-        excelFilePath: selectedFile ? selectedFile.name : '',
-        requirements: getRequirements(),
-        environment: document.getElementById('environment').value,
-        products: getSelectedProducts().length > 0 ? getSelectedProducts() : undefined
-      };
-
-      const result = await fetch(API + '/api/workflows/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }).then(r => r.json());
-
-      closeModal();
-      alert('Workflow created: ' + result.name + ' (' + result.steps + ' steps)');
-      loadDashboard();
-    }
-
-    async function createFromTemplate(templateId) {
-      const name = prompt('Customer name:');
-      if (!name) return;
-      await fetch(API + '/api/workflows/from-template', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ templateId, customerName: name, products: [] })
-      });
-      loadDashboard();
-    }
-
-    async function approveWorkflow(id) {
-      await fetch(API + '/api/workflows/' + id + '/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approvedBy: 'admin' })
-      });
-      closeDetailModal();
-      loadDashboard();
-    }
-
-    async function rejectWorkflow(id) {
-      const reason = prompt('Rejection reason:');
-      if (!reason) return;
-      await fetch(API + '/api/workflows/' + id + '/reject', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason })
-      });
-      closeDetailModal();
-      loadDashboard();
-    }
-
-    async function executeWorkflow(id) {
-      if (!confirm('Execute this workflow?')) return;
-      const result = await fetch(API + '/api/workflows/' + id + '/execute', { method: 'POST' }).then(r => r.json());
-      closeDetailModal();
-      alert('Execution completed: ' + result.stepsSucceeded + '/' + result.stepsExecuted + ' steps succeeded');
-      loadDashboard();
-    }
-
-    // ─── Compliance ──────────────────────────────────────────────────────────
-
-    async function trackCompliance() {
-      const fileInput = document.getElementById('complianceExcel');
-      const customer = document.getElementById('complianceCustomer').value;
-      if (!fileInput.files[0]) { alert('Please upload Excel file'); return; }
-
-      const formData = new FormData();
-      formData.append('excel', fileInput.files[0]);
-      formData.append('customer', customer);
-
-      const result = await fetch(API + '/api/compliance/track', {
-        method: 'POST',
-        body: formData
-      }).then(r => r.json());
-
-      showResult('complianceResult', `Compliance: ${result.complianceRate}%\nTotal Items: ${result.totalItems}\nMissing Items: ${result.missingItems.length}`);
-    }
-
-    async function getComplianceTrend() {
-      const customer = document.getElementById('complianceCustomer').value;
-      if (!customer) { alert('Enter customer name'); return; }
-
-      const result = await fetch(API + '/api/compliance/trend?customer=' + encodeURIComponent(customer)).then(r => r.json());
-      showResult('complianceResult', `Trend: ${result.trend}\nRecords: ${result.records?.length || 0}`);
-    }
-
-    async function generateRoadmap() {
-      const current = parseInt(document.getElementById('roadmapCurrent').value) || 26;
-      const target = parseInt(document.getElementById('roadmapTarget').value) || 87;
-
-      const result = await fetch(API + '/api/compliance/roadmap', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ currentCompliance: current, targetCompliance: target })
-      }).then(r => r.json());
-
-      showResult('roadmapResult', `Phases: ${result.phases?.length || 0}\nEstimated Compliance: ${result.estimatedCompliance}%`);
-    }
-
-    async function generateProposal() {
-      const customer = document.getElementById('proposalCustomer').value;
-      const target = parseInt(document.getElementById('proposalTarget').value) || 87;
-      if (!customer) { alert('Enter customer name'); return; }
-
-      const result = await fetch(API + '/api/compliance/proposal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: customer, targetCompliance: target })
-      }).then(r => r.json());
-
-      showResult('proposalResult', `Proposal: ${result.title}\nTotal Cost: $${result.totalCost}`);
-    }
-
-    // ─── Manual QA ───────────────────────────────────────────────────────────
-
-    async function sendChat() {
-      const input = document.getElementById('chatInput');
-      const question = input.value.trim();
-      if (!question) return;
-
-      const messages = document.getElementById('chatMessages');
-      messages.innerHTML += `<div class="chat-message user"><div class="bubble">${escapeHtml(question)}</div></div>`;
-      input.value = '';
-
-      const result = await fetch(API + '/api/manual/ask', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question })
-      }).then(r => r.json());
-
-      messages.innerHTML += `<div class="chat-message assistant"><div class="bubble">${escapeHtml(result.answer || 'No answer found.')}</div></div>`;
-      messages.scrollTop = messages.scrollHeight;
-    }
-
-    async function findMenuPath() {
-      const product = document.getElementById('menuPathProduct').value;
-      const feature = document.getElementById('menuPathFeature').value;
-      if (!feature) { alert('Enter feature name'); return; }
-
-      const result = await fetch(API + '/api/manual/menu-path', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product, feature })
-      }).then(r => r.json());
-
-      showResult('menuPathResult', `Path: ${result.path}\nVersion: ${result.version}`);
-    }
-
-    // ─── Device Menu ─────────────────────────────────────────────────────────
-
-    async function captureDeviceMenu() {
-      const product = document.getElementById('captureMenuProduct').value;
-      const port = document.getElementById('captureMenuPort').value;
-
-      const result = await fetch(API + '/api/device/capture-menu', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product, cdpPort: parseInt(port) })
-      }).then(r => r.json());
-
-      showResult('captureMenuResult', `Menu Items: ${result.menuItems?.length || 0}\nCaptured At: ${result.capturedAt}`);
-    }
-
-    async function compareManualVsDevice() {
-      const product = document.getElementById('compareProduct').value;
-      const port = document.getElementById('comparePort').value;
-
-      const result = await fetch(API + '/api/device/compare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product, cdpPort: parseInt(port) })
-      }).then(r => r.json());
-
-      let text = `Matched: ${result.matchedItems?.length || 0}\nMissing in Device: ${result.missingInDevice?.length || 0}\nExtra in Device: ${result.extraInDevice?.length || 0}`;
-      showResult('compareResult', text);
-    }
-
-    // ─── Setting Guide ───────────────────────────────────────────────────────
-
-    async function generateSettingGuide() {
-      const customer = document.getElementById('guideCustomer').value;
-      const product = document.getElementById('guideProduct').value;
-      const requirements = document.getElementById('guideRequirements').value;
-      if (!customer || !requirements) { alert('Enter customer and requirements'); return; }
-
-      const result = await fetch(API + '/api/guide/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: customer, product, requirements: requirements.split(',').map(r => r.trim()) })
-      }).then(r => r.json());
-
-      showResult('guideResult', result.guide || JSON.stringify(result, null, 2));
-    }
-
-    // ─── Vendors ─────────────────────────────────────────────────────────────
-
-    async function compareVendors() {
-      const category = document.getElementById('vendorCategory').value;
-      const includeSangfor = document.getElementById('vendorIncludeSangfor').checked;
-
-      const result = await fetch(API + '/api/vendors/compare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ category, includeSangfor })
-      }).then(r => r.json());
-
-      let text = `Vendors: ${result.vendors?.length || 0}\nTop Vendor: ${result.topVendor || 'N/A'}`;
-      if (result.vendors) {
-        result.vendors.forEach(v => {
-          text += `\n\n• ${v.name} (Score: ${v.score})\n  Features: ${v.features?.join(', ') || 'N/A'}`;
-        });
-      }
-      showResult('vendorCompareResult', text);
-    }
-
-    async function generateReport() {
-      const customer = document.getElementById('reportCustomer').value;
-      const category = document.getElementById('reportCategory').value;
-      if (!customer || !category) { alert('Enter customer and category'); return; }
-
-      const result = await fetch(API + '/api/vendors/report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: customer, category })
-      }).then(r => r.json());
-
-      showResult('reportResult', result.report || JSON.stringify(result, null, 2));
-    }
-
-    // ─── Learning ────────────────────────────────────────────────────────────
-
-    async function runLearning(type) {
-      const result = await fetch(API + '/api/learning/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type })
-      }).then(r => r.json());
-
-      showResult('learningResult', `Status: ${result.status}\nVendors: ${result.vendorsProcessed || 0}\nChunks: ${result.chunksIndexed || 0}`);
-    }
-
-    async function createSchedule() {
-      const name = prompt('Schedule name:');
-      if (!name) return;
-      const frequency = prompt('Frequency (daily/weekly/monthly):', 'weekly');
-      if (!frequency) return;
-
-      await fetch(API + '/api/learning/schedules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, frequency, vendors: ['CrowdStrike', 'Microsoft', 'SentinelOne'], enabled: true })
-      });
-      loadSchedules();
-    }
-
-    async function loadSchedules() {
-      const result = await fetch(API + '/api/learning/schedules').then(r => r.json());
-      const list = document.getElementById('scheduleList');
-      list.innerHTML = result.map(s => `
-        <div class="workflow-item">
-          <div class="info">
-            <div class="name">${s.name}</div>
-            <div class="meta">${s.frequency} | Vendors: ${s.vendors?.length || 0}</div>
-          </div>
-          <span class="status ${s.enabled ? 'completed' : 'rejected'}">${s.enabled ? 'Enabled' : 'Disabled'}</span>
-        </div>
-      `).join('') || '<div style="color:#64748b; text-align:center; padding:20px;">No schedules</div>';
-    }
-
-    // ─── Device Access ───────────────────────────────────────────────────────
-
-    async function createAccessRequest() {
-      const customer = document.getElementById('accessCustomer').value;
-      const project = document.getElementById('accessProject').value;
-      const products = document.getElementById('accessProducts').value;
-      if (!customer || !project) { alert('Enter customer and project'); return; }
-
-      const result = await fetch(API + '/api/access/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: customer, projectName: project, products: products.split(',').map(p => p.trim()) })
-      }).then(r => r.json());
-
-      showResult('accessRequestResult', `Request ID: ${result.requestId}\nStatus: ${result.status}`);
-    }
-
-    async function submitAccessInfo() {
-      const requestId = document.getElementById('accessRequestId').value;
-      const product = document.getElementById('accessInfoProduct').value;
-      const ip = document.getElementById('accessInfoIp').value;
-      const port = document.getElementById('accessInfoPort').value;
-      const username = document.getElementById('accessInfoUsername').value;
-      const password = document.getElementById('accessInfoPassword').value;
-      if (!requestId || !ip || !username || !password) { alert('Fill all fields'); return; }
-
-      await fetch(API + '/api/access/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requestId, product, ip, port: parseInt(port), username, password })
-      });
-      alert('Access info submitted');
-    }
-
-    async function loadAccessRequests() {
-      const result = await fetch(API + '/api/access/requests').then(r => r.json());
-      const list = document.getElementById('accessRequestsList');
-      list.innerHTML = result.map(r => `
-        <div class="workflow-item">
-          <div class="info">
-            <div class="name">${r.customerName} - ${r.projectName}</div>
-            <div class="meta">Products: ${r.products?.join(', ') || 'N/A'} | Status: ${r.status}</div>
-          </div>
-          <span class="status ${r.status === 'approved' ? 'completed' : 'draft'}">${r.status}</span>
-        </div>
-      `).join('') || '<div style="color:#64748b; text-align:center; padding:20px;">No requests</div>';
-    }
-
-    // ─── Utilities ───────────────────────────────────────────────────────────
-
-    function showResult(elementId, text) {
-      const el = document.getElementById(elementId);
-      el.style.display = 'block';
-      el.innerHTML = '<pre>' + escapeHtml(text) + '</pre>';
-    }
-
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
-
-    // ─── Init ────────────────────────────────────────────────────────────────
-
-    loadDashboard();
-    loadSchedules();
-    loadAccessRequests();
-    setInterval(loadDashboard, 5000);
-  </script>
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal" style="width:480px">
+      <h3>API Key Settings</h3>
+      <p style="font-size:13px;color:#94a3b8;margin-bottom:12px">Protected API routes require the <code>SANGFOR_API_KEY</code> value from your <code>.env</code> file.</p>
+      <label>X-API-Key</label>
+      <input type="password" id="apiKeyInput" placeholder="Enter API key">
+      <div class="actions">
+        <button class="btn btn-secondary" onclick="closeSettingsModal()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveApiKey()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
 </body>
 </html>
