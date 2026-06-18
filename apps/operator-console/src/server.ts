@@ -57,11 +57,13 @@ import {
   RemediationPlanner,
   PlaybookRegistry,
   parseExcelFile,
+  parseMcpMenuRoutes,
+  computeMenuAccuracy,
   type Workflow,
+  type WorkflowTemplate,
   type RiskLevel,
   type ComplianceAnalysis,
   type CapturedMenu,
-  type MenuNode,
   type McpStdioClient,
 } from '@sangfor/workflow-engine';
 
@@ -356,29 +358,25 @@ app.post('/api/workflows/upload-excel', upload.single('excel'), (req, res) => {
   });
 });
 
+function toTemplateApiResponse(t: WorkflowTemplate) {
+  return { id: t.id, name: t.name, description: t.description, tags: t.tags };
+}
+
 // 템플릿 목록
-app.get('/api/templates', (req, res) => {
-  const templates = [
-    { id: 'iag', name: 'IAG 전용 설정', description: 'IAG 보안 정책 설정', tags: ['IAG', '네트워크'] },
-    { id: 'epp', name: 'EPP 전용 설정', description: 'EPP 엔드포인트 보안', tags: ['EPP', '엔드포인트'] },
-    { id: 'full', name: '풀 시큐리티 설정', description: '전체 보안 솔루션', tags: ['풀스택', 'Compliance'] },
-    { id: 'quick', name: '빠른 감사', description: '빠른 보안 감사', tags: ['감사', 'Compliance'] },
-    { id: 'incident', name: '사고 대응', description: '보안 사고 대응', tags: ['사고대응', '포렌식'] },
-  ];
-  res.json(templates);
+app.get('/api/templates', (_req, res) => {
+  res.json(templateManager.list().map(toTemplateApiResponse));
 });
 
 // 템플릿 검색
 app.get('/api/templates/search', (req, res) => {
-  const { q } = req.query;
-  const templates = [
-    { id: 'iag', name: 'IAG 전용 설정', description: 'IAG 보안 정책 설정', tags: ['IAG', '네트워크'] },
-    { id: 'epp', name: 'EPP 전용 설정', description: 'EPP 엔드포인트 보안', tags: ['EPP', '엔드포인트'] },
-    { id: 'full', name: '풀 시큐리티 설정', description: '전체 보안 솔루션', tags: ['풀스택', 'Compliance'] },
-    { id: 'quick', name: '빠른 감사', description: '빠른 보안 감사', tags: ['감사', 'Compliance'] },
-    { id: 'incident', name: '사고 대응', description: '보안 사고 대응', tags: ['사고대응', '포렌식'] },
-  ];
-  res.json(templates);
+  const q = String(req.query.q ?? '').toLowerCase();
+  const items = templateManager.list().filter((t) =>
+    !q
+    || t.name.toLowerCase().includes(q)
+    || t.description.toLowerCase().includes(q)
+    || t.tags.some((tag) => tag.toLowerCase().includes(q)),
+  );
+  res.json(items.map(toTemplateApiResponse));
 });
 
 // ─── Compliance API ────────────────────────────────────────────────────────
@@ -587,15 +585,10 @@ async function captureDeviceMenuInternal(
       environment: 'lab',
     });
 
-    const menuRoutes = discoverResult?.menuRoutes ?? [];
-    const menus: MenuNode[] = menuRoutes.map((route: { name?: string; path?: string[] }, index: number) => ({
-      id: `mcp-menu-${index}`,
-      name: route.name ?? `Menu ${index + 1}`,
-      path: route.path ?? [route.name ?? `Menu ${index + 1}`],
-      children: [],
-      features: [],
+    const menus = parseMcpMenuRoutes(discoverResult?.menuRoutes ?? []).map((menu) => ({
+      ...menu,
       screenshotPath: captureResult?.captured?.find?.(
-        (c: { menu?: string }) => c.menu === route.name,
+        (c: { menu?: string }) => c.menu === menu.name || menu.path.includes(c.menu ?? ''),
       )?.path,
     }));
 
@@ -657,19 +650,13 @@ app.post('/api/device/compare', async (req, res) => {
       ?? await captureDeviceMenuInternal(product, cdpPort);
     const manualMenus = deviceMenuCapture.getReferenceManualMenus(deviceProduct);
     const comparison = await deviceMenuCapture.compareWithManual(captured, manualMenus);
-
-    const matchedItems = manualMenus
-      .filter((menu) => captured.menus.some((deviceMenu) => deviceMenu.name === menu.name))
-      .map((menu) => menu.name);
+    const { accuracy, matchedItems } = computeMenuAccuracy(manualMenus, captured.menus);
     const missingInDevice = comparison.differences
       .filter((diff) => diff.type === 'removed')
       .map((diff) => diff.description);
     const extraInDevice = comparison.differences
       .filter((diff) => diff.type === 'added')
       .map((diff) => diff.description);
-    const accuracy = manualMenus.length > 0
-      ? Math.round((matchedItems.length / manualMenus.length) * 100)
-      : 100;
 
     res.json({
       product,

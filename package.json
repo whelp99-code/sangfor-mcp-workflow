@@ -20,6 +20,7 @@
     "epp:learn": "tsx scripts/run-device-learn.ts -- --product EPP",
     "iag:learn": "tsx scripts/run-device-learn.ts -- --product IAG",
     "pipeline:run": "tsx scripts/run-project-pipeline.ts",
+    "gen:sample-excel": "node scripts/generate-sample-checklist.mjs",
     "wiki:sync": "tsx scripts/run-wiki-sync.ts"
   },
   "devDependencies": {

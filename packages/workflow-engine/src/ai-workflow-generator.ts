@@ -14,7 +14,7 @@ import type {
   ProjectInput,
   ProductCode,
 } from './types.js';
-import { ToolRegistry, createDefaultToolDefinitions } from './tool-registry.js';
+import { ToolRegistry, createDefaultToolDefinitions, WORKFLOW_TOOL_NAMES } from './tool-registry.js';
 import { DependencyAnalyzer } from './dependency-analyzer.js';
 import { LLMClient, getLLMClient, type ChatMessage } from './llm-client.js';
 
@@ -127,7 +127,9 @@ export class AIWorkflowGenerator {
       log.info(`AI selected ${aiResult.selectedTools.length} tools: ${aiResult.selectedTools.join(', ')}`);
 
       // AI가 선택한 tool로 워크플로우 구성
+      const allowedNames = new Set<string>(WORKFLOW_TOOL_NAMES);
       const selectedTools = aiResult.selectedTools
+        .filter((name) => allowedNames.has(name) && !name.startsWith('sangfor.'))
         .map((name) => this.toolRegistry.getTool(name))
         .filter((t): t is ToolDefinition => t !== undefined);
 
@@ -159,7 +161,7 @@ export class AIWorkflowGenerator {
   // ─── 규칙 기반 생성 (fallback) ─────────────────────────────────────────────
 
   private async generateWithRules(profile: CustomerProfile): Promise<Workflow> {
-    const availableTools = this.toolRegistry.listTools();
+    const availableTools = this.toolRegistry.listWorkflowTools();
     const selectedTools = this.selectToolsByRules(profile, availableTools);
     const dependencies = this.dependencyAnalyzer.analyzeDependencies(selectedTools);
     const orderedSteps = this.topologicalSort(selectedTools, dependencies, profile);
@@ -198,6 +200,8 @@ Rules:
 3. Order tools based on dependencies (some tools need output from previous tools)
 4. Provide clear reasoning for your tool selection
 5. Estimate duration and cost realistically
+6. Use ONLY tool names from the Available Tools list (5-9 tools typical; never select all tools)
+7. NEVER use sangfor.* prefixed tool names — use alias names like import_excel, capture_screenshots
 
 Output MUST be valid JSON with this structure:
 {
@@ -239,12 +243,14 @@ Select the optimal tools for this customer and create a workflow.
 - If no Excel file, skip import_excel
 - If customer wants screenshots, include capture_screenshots
 - Always include generate_evidence_report at the end
+- Select 5-9 tools only; do not include every available tool
+- Use alias tool names only (never sangfor.* prefixes)
 
 Respond with JSON only.`;
   }
 
   private buildToolList(): string {
-    const tools = this.toolRegistry.listTools();
+    const tools = this.toolRegistry.listWorkflowTools();
     return tools.map((t) =>
       `- ${t.name}: ${t.description} [category: ${t.category}, tags: ${t.tags.join(', ')}]`
     ).join('\n');
@@ -338,27 +344,29 @@ Respond with JSON only.`;
   }
 
   private selectToolsByRules(profile: CustomerProfile, availableTools: ToolDefinition[]): ToolDefinition[] {
+    const toolMap = new Map(availableTools.map((t) => [t.name, t]));
     const selected: ToolDefinition[] = [];
-    const selectedNames = new Set<string>();
+    const hasExcel = Boolean(profile.metadata?.excelFilePath);
 
-    // 필수 tool
-    const required = ['import_excel', 'analyze_requirements', 'generate_evidence_report'];
-    for (const name of required) {
-      const tool = availableTools.find((t) => t.name === name);
-      if (tool && !selectedNames.has(name)) {
-        selected.push(tool);
-        selectedNames.add(name);
-      }
+    const coreOrder = [
+      ...(hasExcel ? ['import_excel'] : []),
+      'analyze_requirements',
+      'generate_change_plan',
+      'generate_setting_guide_docx',
+      'generate_setting_guide_pptx',
+      'capture_screenshots',
+      'generate_evidence_report',
+    ];
+
+    for (const name of coreOrder) {
+      const tool = toolMap.get(name);
+      if (tool) selected.push(tool);
     }
 
-    // 제품별 tool
-    for (const product of profile.products) {
-      const productTools = availableTools.filter(
-        (t) => (t.tags.includes(product.toLowerCase()) || t.tags.includes('product-agnostic')) && !selectedNames.has(t.name)
-      );
-      for (const tool of productTools) {
-        selected.push(tool);
-        selectedNames.add(tool.name);
+    if (profile.products.length > 1) {
+      for (const name of ['search_manuals', 'run_health_check']) {
+        const tool = toolMap.get(name);
+        if (tool) selected.push(tool);
       }
     }
 
@@ -433,6 +441,17 @@ Respond with JSON only.`;
         break;
       case 'generate_evidence_report':
         args.customerName = profile.customerName;
+        break;
+      case 'search_manuals':
+        args.product = profile.products[0] ?? 'IAG';
+        args.query = profile.requirements.map((r) => r.text).join(' ');
+        break;
+      case 'run_health_check':
+        args.product = profile.products[0] ?? 'IAG';
+        break;
+      case 'generate_setting_guide_docx':
+      case 'generate_setting_guide_pptx':
+        args.filePath = profile.metadata.excelFilePath || '';
         break;
     }
     return args;

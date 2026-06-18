@@ -52,6 +52,86 @@ export interface MenuDifference {
   severity: 'low' | 'medium' | 'high';
 }
 
+// ─── MCP menu route parsing & comparison helpers ────────────────────────────
+
+export function normalizeMenuName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/[&/]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function flattenMenuNodes(menus: MenuNode[]): MenuNode[] {
+  const result: MenuNode[] = [];
+  const walk = (nodes: MenuNode[]) => {
+    for (const node of nodes) {
+      result.push(node);
+      if (node.children?.length) walk(node.children);
+    }
+  };
+  walk(menus);
+  return result;
+}
+
+export function parseMcpMenuRoutes(menuRoutes: unknown[]): MenuNode[] {
+  return menuRoutes.map((route, index) => {
+    if (typeof route === 'string') {
+      const segments = route.split('>').map((s) => s.trim()).filter(Boolean);
+      const name = segments[segments.length - 1] ?? route;
+      return { id: `mcp-${index}`, name, path: segments, children: [], features: [] };
+    }
+    if (route && typeof route === 'object') {
+      const obj = route as { name?: string; path?: string[] };
+      const path = obj.path ?? (obj.name ? [obj.name] : [`Menu ${index + 1}`]);
+      const name = obj.name ?? path[path.length - 1] ?? `Menu ${index + 1}`;
+      return { id: `mcp-menu-${index}`, name, path, children: [], features: [] };
+    }
+    return {
+      id: `mcp-menu-${index}`,
+      name: `Menu ${index + 1}`,
+      path: [`Menu ${index + 1}`],
+      children: [],
+      features: [],
+    };
+  });
+}
+
+function menuNodeMatches(manualNode: MenuNode, deviceFlat: MenuNode[]): boolean {
+  const manualNorm = normalizeMenuName(manualNode.name);
+  const manualLeaf = normalizeMenuName(manualNode.path[manualNode.path.length - 1] ?? manualNode.name);
+
+  return deviceFlat.some((device) => {
+    const deviceNorm = normalizeMenuName(device.name);
+    if (deviceNorm === manualNorm || deviceNorm === manualLeaf) return true;
+
+    const deviceLeaf = normalizeMenuName(device.path[device.path.length - 1] ?? device.name);
+    return deviceLeaf === manualNorm || deviceLeaf === manualLeaf;
+  });
+}
+
+export function computeMenuAccuracy(
+  manualMenus: MenuNode[],
+  deviceMenus: MenuNode[],
+): { accuracy: number; matchedItems: string[] } {
+  const manualFlat = flattenMenuNodes(manualMenus);
+  const deviceFlat = flattenMenuNodes(deviceMenus);
+  const matchedItems: string[] = [];
+
+  for (const manual of manualFlat) {
+    if (menuNodeMatches(manual, deviceFlat)) {
+      matchedItems.push(manual.name);
+    }
+  }
+
+  const accuracy = manualFlat.length > 0
+    ? Math.round((matchedItems.length / manualFlat.length) * 100)
+    : 100;
+
+  return { accuracy, matchedItems };
+}
+
 // ─── 실장비 메뉴 캡처 ──────────────────────────────────────────────────────
 
 export class DeviceMenuCapture {
@@ -93,11 +173,11 @@ export class DeviceMenuCapture {
     log.info(`Comparing menus: ${captured.product}`);
 
     const differences: MenuDifference[] = [];
+    const manualFlat = flattenMenuNodes(manualMenus);
+    const deviceFlat = flattenMenuNodes(captured.menus);
 
-    // 메뉴얼에는 있지만 실장비에 없는 메뉴
-    for (const manualMenu of manualMenus) {
-      const found = this.findMenuInList(captured.menus, manualMenu.name);
-      if (!found) {
+    for (const manualMenu of manualFlat) {
+      if (!menuNodeMatches(manualMenu, deviceFlat)) {
         differences.push({
           type: 'removed',
           manualPath: manualMenu.path,
@@ -108,9 +188,8 @@ export class DeviceMenuCapture {
       }
     }
 
-    // 실장비에는 있지만 메뉴얼에 없는 메뉴
-    for (const deviceMenu of captured.menus) {
-      const found = this.findMenuInList(manualMenus, deviceMenu.name);
+    for (const deviceMenu of deviceFlat) {
+      const found = manualFlat.some((manual) => menuNodeMatches(manual, [deviceMenu]));
       if (!found) {
         differences.push({
           type: 'added',

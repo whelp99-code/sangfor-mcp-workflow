@@ -8,6 +8,21 @@ import { McpStdioClient } from './mcp-client.js';
 
 const log = createLogger('tool-registry');
 
+/** Workflow generation/execution용 고수준 tool (createDefaultToolDefinitions + MCP aliases와 동일 집합) */
+export const WORKFLOW_TOOL_NAMES = [
+  'import_excel',
+  'analyze_requirements',
+  'generate_change_plan',
+  'generate_setting_guide_docx',
+  'generate_setting_guide_pptx',
+  'capture_screenshots',
+  'generate_evidence_report',
+  'search_manuals',
+  'run_health_check',
+] as const;
+
+export type WorkflowToolName = (typeof WORKFLOW_TOOL_NAMES)[number];
+
 // ─── Tool Registry ──────────────────────────────────────────────────────────
 
 export class ToolRegistry {
@@ -183,6 +198,12 @@ export class ToolRegistry {
    * 저수준 클릭 tool이 MCP로 직접 노출되지 않도록 필터링
    * 고수준 tool만 반환 (import_excel, analyze_requirements, generate_change_plan 등)
    */
+  /** 워크플로우 생성·실행에 사용할 고수준 tool만 반환 (MCP 51개 전체 제외) */
+  listWorkflowTools(): ToolDefinition[] {
+    const allowed = new Set<string>(WORKFLOW_TOOL_NAMES);
+    return this.listTools().filter((tool) => allowed.has(tool.name));
+  }
+
   listSafeTools(): ToolDefinition[] {
     const unsafePatterns = [
       'click_',
