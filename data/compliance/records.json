@@ -1,0 +1,196 @@
+{
+  "PersistTest-ALL": [
+    {
+      "id": "compliance_mqj6gutv_rb3kax",
+      "date": "2026-06-18T07:27:52.339Z",
+      "customer": "PersistTest",
+      "product": "ALL",
+      "compliance": 70,
+      "totalItems": 10,
+      "passedItems": 7,
+      "partiallyPassed": 0,
+      "failedItems": 3,
+      "items": [
+        {
+          "id": "item-0",
+          "category": "Malware",
+          "solution": "Anti-Virus",
+          "item": "Real-time scan",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-1",
+          "category": "Malware",
+          "solution": "Anti-Virus",
+          "item": "Engine update",
+          "result": 0,
+          "improved": false
+        },
+        {
+          "id": "item-2",
+          "category": "Endpoint",
+          "solution": "Software Control",
+          "item": "Unauthorized software",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-3",
+          "category": "Endpoint",
+          "solution": "Device Control",
+          "item": "USB storage",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-4",
+          "category": "Network",
+          "solution": "Data Loss Prevention",
+          "item": "DLP policy",
+          "result": 0,
+          "improved": false
+        },
+        {
+          "id": "item-5",
+          "category": "Network",
+          "solution": "Anti-Spam",
+          "item": "Email filtering",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-6",
+          "category": "Access",
+          "solution": "Network Access Contro",
+          "item": "NAC policy",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-7",
+          "category": "Monitoring",
+          "solution": "Log Management",
+          "item": "Centralized logging",
+          "result": 0,
+          "improved": false
+        },
+        {
+          "id": "item-8",
+          "category": "Monitoring",
+          "solution": "Security Monitoring",
+          "item": "Alert rules",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-9",
+          "category": "Endpoint",
+          "solution": "System Management",
+          "item": "Agent deployment",
+          "result": 1,
+          "improved": false
+        }
+      ],
+      "filePath": "uploads/15fdac6c248896b7625853202665b158",
+      "metadata": {}
+    }
+  ],
+  "V-ALL": [
+    {
+      "id": "compliance_mqj9njfj_wf3iqm",
+      "date": "2026-06-18T08:57:03.007Z",
+      "customer": "V",
+      "product": "ALL",
+      "compliance": 70,
+      "totalItems": 10,
+      "passedItems": 7,
+      "partiallyPassed": 0,
+      "failedItems": 3,
+      "items": [
+        {
+          "id": "item-0",
+          "category": "Malware",
+          "solution": "Anti-Virus",
+          "item": "Real-time scan",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-1",
+          "category": "Malware",
+          "solution": "Anti-Virus",
+          "item": "Engine update",
+          "result": 0,
+          "improved": false
+        },
+        {
+          "id": "item-2",
+          "category": "Endpoint",
+          "solution": "Software Control",
+          "item": "Unauthorized software",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-3",
+          "category": "Endpoint",
+          "solution": "Device Control",
+          "item": "USB storage",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-4",
+          "category": "Network",
+          "solution": "Data Loss Prevention",
+          "item": "DLP policy",
+          "result": 0,
+          "improved": false
+        },
+        {
+          "id": "item-5",
+          "category": "Network",
+          "solution": "Anti-Spam",
+          "item": "Email filtering",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-6",
+          "category": "Access",
+          "solution": "Network Access Contro",
+          "item": "NAC policy",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-7",
+          "category": "Monitoring",
+          "solution": "Log Management",
+          "item": "Centralized logging",
+          "result": 0,
+          "improved": false
+        },
+        {
+          "id": "item-8",
+          "category": "Monitoring",
+          "solution": "Security Monitoring",
+          "item": "Alert rules",
+          "result": 1,
+          "improved": false
+        },
+        {
+          "id": "item-9",
+          "category": "Endpoint",
+          "solution": "System Management",
+          "item": "Agent deployment",
+          "result": 1,
+          "improved": false
+        }
+      ],
+      "filePath": "uploads/5f42b0fc3f132c4e25e93602aa46e7f9",
+      "metadata": {}
+    }
+  ]
+}

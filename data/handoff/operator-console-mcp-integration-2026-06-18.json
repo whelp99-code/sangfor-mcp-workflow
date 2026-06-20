@@ -1,0 +1,20 @@
+{
+  "id": "operator-console-mcp-integration-2026-06-18",
+  "createdAt": "2026-06-18T00:00:00+09:00",
+  "branch": "cursor/operator-console-mcp-integration",
+  "commit": "b3c5ff6",
+  "baseBranch": "main",
+  "pushed": false,
+  "commitMessage": "feat(operator-console): wire MCP backends and complete web UI integration",
+  "excludedFromCommit": [
+    {
+      "path": "data/rag/index.json",
+      "reason": "학습 테스트로 생성된 런타임 데이터"
+    },
+    {
+      "path": "scripts/audit-operator-console.mjs",
+      "reason": "감사 스크립트 (미추적)"
+    }
+  ],
+  "notes": "push는 하지 않았습니다."
+}

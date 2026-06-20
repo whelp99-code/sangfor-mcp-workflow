@@ -56,14 +56,14 @@ export async function bootstrapMcpClient(
 
   const client = new McpStdioClient('apps/mcp-server/src/index.ts', {
     cwd: mcpCwd,
-    command: tsxCli.endsWith('.mjs') ? 'node' : 'npx',
-    args: tsxArgs,
+    command: 'node',
+    args: ['--import', 'tsx', 'apps/mcp-server/src/index.ts'],
     env: {
       SANGFOR_DB_ENABLED: '0',
       SANGFOR_OCR_DIR: join(workflowCwd, 'outputs', 'captcha-ocr'),
       PATH: `/opt/homebrew/bin:/usr/local/bin:${process.env.PATH ?? ''}`,
     },
-    requestTimeoutMs: 600_000,
+    requestTimeoutMs: 30_000,
   });
 
   try {

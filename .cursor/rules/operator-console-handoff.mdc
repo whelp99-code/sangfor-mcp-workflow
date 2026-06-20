@@ -1,0 +1,21 @@
+---
+description: Operator Console MCP integration commit handoff — excluded files and push status
+alwaysApply: true
+---
+
+# Operator Console handoff (cursor/operator-console-mcp-integration)
+
+커밋·브랜치 후속 작업 시 `data/handoff/` JSON을 확인한다.
+
+## Commit b3c5ff6 (branch: cursor/operator-console-mcp-integration)
+
+**커밋에서 제외한 항목 (의도적):**
+
+| 경로 | 이유 |
+|------|------|
+| `data/rag/index.json` | 학습 테스트로 생성된 런타임 데이터 |
+| `scripts/audit-operator-console.mjs` | 감사 스크립트 (미추적) |
+
+**Push:** 하지 않음 (`pushed: false`).
+
+상세: `data/handoff/operator-console-mcp-integration-2026-06-18.json`

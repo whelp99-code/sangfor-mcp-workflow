@@ -170,9 +170,17 @@ export class ManualScenarioExtractor {
     llmModel?: string;
   }) {
     this.scenarioDB = options.scenarioDB;
-    this.llmEndpoint = options.llmEndpoint ?? 'http://localhost:1234/v1/chat/completions';
-    this.llmApiKey = options.llmApiKey ?? process.env.OPENAI_API_KEY ?? 'lm-studio';
-    this.llmModel = options.llmModel ?? 'local-model';
+    const useMimo = !options.llmEndpoint || options.llmEndpoint.includes('xiaomimimo');
+    this.llmEndpoint = options.llmEndpoint
+      ?? process.env.LLM_ENDPOINT
+       ?? (useMimo ? 'https://api.xiaomimimo.com/v1/chat/completions' : 'http://localhost:1234/v1/chat/completions');
+    this.llmApiKey = options.llmApiKey
+      ?? process.env.XIAOMI_API_KEY
+       ?? process.env.OPENAI_API_KEY
+       ?? (useMimo ? '' : 'lm-studio');
+    this.llmModel = options.llmModel
+      ?? process.env.LLM_MODEL
+       ?? (useMimo ? 'mimo-v2-flash' : 'local-model');
   }
 
   // ── 1단계: 패턴 기반 빠른 추출 (LLM 불필요) ──

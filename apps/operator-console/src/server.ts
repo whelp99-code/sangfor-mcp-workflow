@@ -12,15 +12,15 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { config as loadEnv } from 'dotenv';
 import { createLogger } from '@sangfor/workflow-shared';
-import { healthRoutes } from './routes/index.js';
-import { apiKeyAuth } from './middleware/auth.js';
+import { healthRoutes } from './routes/index';
+import { apiKeyAuth } from './middleware/auth';
 import {
   bootstrapMcpClient,
   getProductEnv,
   toDeviceProduct,
   toGuideProduct,
-} from './bootstrap/mcp-bootstrap.js';
-import { buildComplianceAnalysis, buildComplianceRecord } from './services/compliance-helpers.js';
+} from './bootstrap/mcp-bootstrap';
+import { buildComplianceAnalysis, buildComplianceRecord } from './services/compliance-helpers';
 
 loadEnv();
 
