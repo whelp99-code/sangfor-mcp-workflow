@@ -71,5 +71,5 @@ pnpm run wiki:sync -- --vault ~/Documents/Obsidian\ Vault/
 
 ## Related Projects
 
-- **sangfor-engineer-mcp**: ~/Documents/Playground/whelp99-code-sangfor-engineer-mcp
+- **sangfor-engineer-mcp**: ~/Playground/whelp99-code-sangfor-engineer-mcp
 - **Obsidian Vault**: ~/Documents/Obsidian Vault/

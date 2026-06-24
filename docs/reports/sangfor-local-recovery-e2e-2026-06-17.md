@@ -4,7 +4,7 @@
 
 ## 1. 로컬 저장소 복구
 
-- 기존 작업 폴더를 백업으로 이동: `/Users/jmpark/Documents/Playground/sangfor-mcp-workflow.backup-20260617-003244`
+- 기존 작업 폴더를 백업으로 이동: `/Users/jmpark/Playground/sangfor-mcp-workflow.backup-20260617-003244`
 - 원격 main을 fresh clone으로 재구성
 - `.env`만 새 작업 폴더에 복원
 - `.hermes`, `outputs`, `uploads`는 일부 파일 읽기 timeout이 있어 새 작업 폴더로 복원하지 않고 백업 폴더에 보존
